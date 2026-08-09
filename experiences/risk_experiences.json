@@ -1,0 +1,129 @@
+[
+  {
+    "experience_id": "exp_narrow_collision_001",
+    "task_goal": "到达会议室门口",
+    "robot": {
+      "type": "mobile_robot",
+      "width_m": 0.55,
+      "battery_percent": 70
+    },
+    "environment": {
+      "corridor_width_m": 0.70,
+      "obstacle_detected": true,
+      "obstacle_distance_m": 0.8,
+      "observation_confidence": 0.62
+    },
+    "action": {
+      "name": "move_forward",
+      "parameters": {
+        "speed_mps": 0.4
+      }
+    },
+    "outcome": {
+      "status": "failure",
+      "description": "机器人右侧与墙壁发生刮擦并触发急停"
+    },
+    "risk": {
+      "type": "narrow_corridor_collision",
+      "severity": 4,
+      "failure_reason": "低置信度下在极小通行余量中直接前进"
+    },
+    "decision": "safe_stop",
+    "lesson": "通行余量小且观测置信度不足时，应先重新观测并降低速度。"
+  },
+  {
+    "experience_id": "exp_narrow_success_002",
+    "task_goal": "到达会议室门口",
+    "robot": {
+      "type": "mobile_robot",
+      "width_m": 0.55,
+      "battery_percent": 66
+    },
+    "environment": {
+      "corridor_width_m": 0.74,
+      "obstacle_detected": true,
+      "obstacle_distance_m": 1.1,
+      "observation_confidence": 0.91
+    },
+    "action": {
+      "name": "slow_down",
+      "parameters": {
+        "speed_mps": 0.12
+      }
+    },
+    "outcome": {
+      "status": "success",
+      "description": "机器人重新观测并居中后低速通过"
+    },
+    "risk": {
+      "type": "narrow_corridor_collision",
+      "severity": 3,
+      "failure_reason": "未发生失败；风险通过重新观测和降速得到缓解"
+    },
+    "decision": "execute",
+    "lesson": "高置信度确认通行空间后，居中低速移动可以缓解窄通道风险。"
+  },
+  {
+    "experience_id": "exp_open_corridor_003",
+    "task_goal": "到达充电点",
+    "robot": {
+      "type": "mobile_robot",
+      "width_m": 0.55,
+      "battery_percent": 35
+    },
+    "environment": {
+      "corridor_width_m": 1.8,
+      "obstacle_detected": false,
+      "obstacle_distance_m": 5.0,
+      "observation_confidence": 0.94
+    },
+    "action": {
+      "name": "move_forward",
+      "parameters": {
+        "speed_mps": 0.35
+      }
+    },
+    "outcome": {
+      "status": "success",
+      "description": "机器人顺利到达充电点"
+    },
+    "risk": {
+      "type": "low_battery",
+      "severity": 2,
+      "failure_reason": "未发生失败"
+    },
+    "decision": "execute",
+    "lesson": "宽阔无障碍通道中可正常前进，但需要持续监测剩余电量。"
+  },
+  {
+    "experience_id": "exp_dynamic_obstacle_004",
+    "task_goal": "到达会议室门口",
+    "robot": {
+      "type": "mobile_robot",
+      "width_m": 0.55,
+      "battery_percent": 80
+    },
+    "environment": {
+      "corridor_width_m": 1.2,
+      "obstacle_detected": true,
+      "obstacle_distance_m": 0.6,
+      "observation_confidence": 0.88
+    },
+    "action": {
+      "name": "safe_stop",
+      "parameters": {}
+    },
+    "outcome": {
+      "status": "success",
+      "description": "机器人停止等待行人通过，未发生碰撞"
+    },
+    "risk": {
+      "type": "dynamic_obstacle_collision",
+      "severity": 5,
+      "failure_reason": "未发生失败；安全停止避免了动态碰撞"
+    },
+    "decision": "safe_stop",
+    "lesson": "近距离动态障碍物出现时应停止并等待重新观测。"
+  }
+]
+
