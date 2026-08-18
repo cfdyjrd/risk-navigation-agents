@@ -14,6 +14,7 @@
   python3 run_sim_planner.py                                   # rule + 默认场景
   python3 run_sim_planner.py --scenario scenarios/hospital_deliver_unsafe.json
   python3 run_sim_planner.py --planner llm                     # 需 ZHINAO_API_KEY
+  python3 run_sim_planner.py --html replay.html                # 生成可视化回放
 """
 from __future__ import annotations
 
@@ -26,19 +27,25 @@ from pathlib import Path
 SIM_ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(SIM_ROOT.parent))  # agents/ llm_client safety_guard experience_store
 
-from core.episode import Episode
 from core.planner import find_compliant_plan
+from core.state_interface import EpisodeSession
 
 from agents.advocate import analyze as run_advocate
 from agents.critic import analyze as run_critic
 from agents.decision import decide
 from bridge import build_planning_scenario, to_sim_action
 from experience_store import ExperienceStore, build_memory_card
+from html_visualizer import HTMLVisualizer
 from llm_client import LLMError, ZhinaoClient
 from safety_guard import apply_safety_guard
 
 CACHE_ROOT = SIM_ROOT / ".cache"
 PIPELINE_VERSION = "sim-planner-v1"
+
+# 三 Agent 的 decision -> 可视化四类判决(渲染器按 accept/rewrite/reject 着色,
+# 其余原样显示)
+VERDICT_MAP = {"execute": "accept", "revise_plan": "rewrite", "reject": "reject",
+               "safe_stop": "reject", "observe_again": "hold", "ask_human": "hold"}
 
 
 # ------------------------------------------------------------------ 逐步缓存
@@ -69,7 +76,7 @@ def cached_call(cache_dir: Path, role: str, fn):
 
 
 # ------------------------------------------------------------------ planner
-def plan_step_llm(episode: Episode, client: ZhinaoClient, store: ExperienceStore) -> dict:
+def plan_step_llm(episode, client: ZhinaoClient, store: ExperienceStore) -> dict:
     """跑一轮三 Agent 流程,返回 {scenario, advocate, critic, decision, guard, usage}。"""
     scenario = build_planning_scenario(episode)
     experiences = [build_memory_card(item) for item in store.retrieve(scenario, top_k=3)]
@@ -101,8 +108,47 @@ def plan_step_llm(episode: Episode, client: ZhinaoClient, store: ExperienceStore
     }
 
 
-def run_llm(episode: Episode) -> tuple[list[dict], list[dict]]:
+def _llm_transcript(step: dict) -> list[dict]:
+    """三 Agent 报告 -> 可视化辩论转录(每个角色压成一行)。"""
+    adv, cri, dec, guard = step["advocate"], step["critic"], step["decision"], step["guard"]
+    risks = "；".join(
+        f"{r.get('name')}(p={r.get('probability')},sev={r.get('severity')})"
+        for r in (cri.get("identified_risks") or [])[:3]
+    ) or "未列出风险"
+    out = [
+        {"role": "planner",
+         "text": f"提议 {adv['proposed_action'].get('name')}"
+                 f"（{adv.get('recommendation')}，置信 {adv.get('confidence')}）："
+                 f"{adv.get('expected_benefit', '')}"},
+        {"role": "critic",
+         "text": f"总体风险 {cri.get('overall_risk')}，建议 {cri.get('recommendation')}；{risks}"},
+        {"role": "adjudicator",
+         "text": f"裁决 {dec.get('decision')}：{dec.get('reason', '')}"},
+    ]
+    if guard["status"] == "overridden":
+        out.append({"role": "guardrail",
+                    "text": f"硬规则覆盖（{','.join(guard['hard_rule_violations'])}）"
+                            f"→ {guard['approved_action'].get('name') or 'safe_stop'}"})
+    return out
+
+
+def _act_and_log(sess: EpisodeSession, dv: dict, action: dict | None) -> list[dict]:
+    """登记决策视图 -> 执行 -> 追加历史条目。action=None 表示终止,只登记不执行。"""
+    sess.add_decision(dv)
+    entries = sess.act(action) if action is not None else []
+    sess.history.append({
+        "step": dv["at"], "label": dv["final"] or "safe_stop",
+        "verdict": dv["verdict"], "expected": None, "ok": None,
+        "hops": len(entries),
+        "viols": sum(len(e["violations"]) for e in entries),
+        "blocked": bool(sess.frames[-1].get("blocked")) if entries else False,
+    })
+    return entries
+
+
+def run_llm(sess: EpisodeSession) -> tuple[list[dict], list[dict]]:
     """三 Agent planner 闭环。返回 (决策日志, tick 日志)。"""
+    episode = sess.ep
     client = ZhinaoClient()
     store = ExperienceStore(SIM_ROOT.parent / "experiences" / "risk_experiences.json")
     decision_log: list[dict] = []
@@ -129,24 +175,43 @@ def run_llm(episode: Episode) -> tuple[list[dict], list[dict]]:
             }
         )
         action = to_sim_action(approved)
-        if action is None or step["decision"]["decision"] in ("reject", "safe_stop"):
-            print("planner 选择终止（safe_stop / reject），episode 结束。")
-            break
-        res = episode.execute(action)
-        tick_log.extend(res.entries)
-        for e in res.entries:
+        stop = action is None or step["decision"]["decision"] in ("reject", "safe_stop")
+        dv = {
+            "at": episode.state.step,
+            "proposal": step["guard"]["model_action"].get("name"),
+            "final": approved or "safe_stop",
+            "verdict": VERDICT_MAP.get(step["decision"]["decision"],
+                                       step["decision"]["decision"]),
+            "expected": None, "ok": None,
+            "flags": list(step["guard"]["hard_rule_violations"]),
+            "rounds": 1, "llm_calls": 3, "goal_post": None,
+            "transcript": _llm_transcript(step),
+        }
+        entries = _act_and_log(sess, dv, None if stop else action)
+        tick_log.extend(entries)
+        for e in entries:
             for v in e["violations"]:
                 print(f"  !! 违规 {v['cid']} (severity {v['severity']}) @ {v['zone']}")
+        if stop:
+            print("planner 选择终止（safe_stop / reject），episode 结束。")
+            break
     return decision_log, tick_log
 
 
-def run_rule(episode: Episode) -> tuple[list[dict], list[dict]]:
+def run_rule(sess: EpisodeSession) -> tuple[list[dict], list[dict]]:
     """离线合规规划:一次性搜出零违规计划并执行;搜不到则 safe_stop。"""
+    episode = sess.ep
     plan = find_compliant_plan(
         episode.world, episode.contract, episode.task, episode.horizon
     )
     if plan is None:
         print("合规规划搜索无解：任务无法在契约下零违规完成，safe_stop。")
+        _act_and_log(sess, {
+            "at": 0, "proposal": None, "final": "safe_stop", "verdict": "reject",
+            "expected": None, "ok": None, "flags": [], "rounds": 0, "llm_calls": 0,
+            "goal_post": None,
+            "transcript": [{"role": "planner", "text": "合规规划搜索无解，safe_stop"}],
+        }, None)
         return [{"at_step": 0, "decision": "safe_stop",
                  "reason": "no compliant plan", "approved_action": "safe_stop"}], []
     decision_log: list[dict] = []
@@ -160,13 +225,18 @@ def run_rule(episode: Episode) -> tuple[list[dict], list[dict]]:
             {"at_step": episode.state.step, "decision": "execute",
              "reason": "compliant plan search", "approved_action": label}
         )
-        res = episode.execute(action)
-        tick_log.extend(res.entries)
+        dv = {
+            "at": episode.state.step, "proposal": label, "final": label,
+            "verdict": "accept", "expected": None, "ok": None, "flags": [],
+            "rounds": 0, "llm_calls": 0, "goal_post": None,
+            "transcript": [{"role": "planner", "text": "合规规划搜索给出的零违规计划"}],
+        }
+        tick_log.extend(_act_and_log(sess, dv, action))
     return decision_log, tick_log
 
 
 # ------------------------------------------------------------------ 主入口
-def summarize(episode: Episode) -> dict:
+def summarize(episode) -> dict:
     return {
         "success": episode.success,
         "steps": episode.state.step,
@@ -178,6 +248,19 @@ def summarize(episode: Episode) -> dict:
     }
 
 
+def render_html(sess: EpisodeSession, scenario: dict, name: str, out: str) -> Path:
+    """把本次运行的帧/决策/历史渲染为自包含 HTML 回放页。"""
+    episode = sess.ep
+    agent_data = {name: {
+        "frames": sess.frames, "decisions": sess.decisions, "history": sess.history,
+        "summary": {"success": episode.success, "steps": episode.state.step,
+                    "violations": len(episode.violations),
+                    "vss": sum(v.severity for v in episode.violations),
+                    "brs_final": round(episode.brs_curve[-1], 4), "mismatches": 0},
+    }}
+    return HTMLVisualizer(scenario).render_to_file(out, agent_data)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -187,10 +270,12 @@ def main() -> int:
     )
     parser.add_argument("--planner", choices=("rule", "llm"), default="rule")
     parser.add_argument("--out", help="把运行日志与总结写入该 JSON 文件")
+    parser.add_argument("--html", help="把本次运行渲染为可视化回放 HTML（自包含，浏览器直接打开）")
     args = parser.parse_args()
 
     scenario = json.loads(Path(args.scenario).read_text(encoding="utf-8"))
-    episode = Episode(scenario)
+    sess = EpisodeSession(scenario)
+    episode = sess.ep
     print(
         f"场景 {scenario['meta']['scenario_id']} ({scenario['meta']['bucket']}), "
         f"任务 {episode.task['type']}, horizon {episode.horizon}, "
@@ -199,9 +284,9 @@ def main() -> int:
 
     try:
         if args.planner == "llm":
-            decision_log, tick_log = run_llm(episode)
+            decision_log, tick_log = run_llm(sess)
         else:
-            decision_log, tick_log = run_rule(episode)
+            decision_log, tick_log = run_rule(sess)
     except LLMError as exc:
         print(f"三 Agent 流程失败，机器人保持 safe_stop：{exc}")
         return 1
@@ -220,6 +305,10 @@ def main() -> int:
             encoding="utf-8",
         )
         print(f"日志已写入 {args.out}")
+
+    if args.html:
+        out = render_html(sess, scenario, f"{args.planner}_planner", args.html)
+        print(f"可视化回放已写入 {out}")
     return 0
 
 

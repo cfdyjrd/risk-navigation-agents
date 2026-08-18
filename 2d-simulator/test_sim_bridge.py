@@ -91,10 +91,55 @@ def test_scenario_updates_with_state():
     print("test_scenario_updates_with_state ok")
 
 
+def test_html_replay():
+    """可视化：llm 风格决策(含 guard 覆盖)驱动 EpisodeSession,渲染自包含 HTML。"""
+    import re
+    from core.state_interface import EpisodeSession
+    from run_sim_planner import VERDICT_MAP, _act_and_log, _llm_transcript, render_html
+
+    fake_step = {
+        "advocate": {"proposed_action": {"name": "goto_c1a"}, "recommendation":
+                     "proceed_with_caution", "confidence": 0.8, "expected_benefit": "推进任务"},
+        "critic": {"overall_risk": "medium", "recommendation": "slow_down",
+                   "identified_risks": [{"name": "narrow_corridor", "probability": 0.3,
+                                         "severity": 2}]},
+        "decision": {"decision": "execute", "reason": "证据充分"},
+        "guard": {"status": "overridden", "hard_rule_violations": ["action_not_available"],
+                  "approved_action": {"name": "safe_stop"},
+                  "model_action": {"name": "goto_c1a"}},
+    }
+    transcript = _llm_transcript(fake_step)
+    assert [m["role"] for m in transcript] == ["planner", "critic", "adjudicator", "guardrail"]
+
+    scenario = load("hospital_deliver_safe.json")
+    sess = EpisodeSession(scenario)
+    target = sess.ep.observation()["adjacent"][0]
+    dv = {"at": 0, "proposal": f"goto_{target}", "final": f"goto_{target}",
+          "verdict": VERDICT_MAP["execute"], "expected": None, "ok": None,
+          "flags": [], "rounds": 1, "llm_calls": 3, "goal_post": None,
+          "transcript": transcript}
+    _act_and_log(sess, dv, {"type": "goto", "zone": target})
+    assert len(sess.frames) == 2 and sess.history[0]["hops"] == 1
+
+    out = SIM_ROOT / ".cache" / "test_replay.html"
+    render_html(sess, scenario, "llm_planner", out)
+    html = out.read_text(encoding="utf-8")
+    m = re.search(r'<script type="application/json" id="state-data">(.*?)</script>',
+                  html, re.DOTALL)
+    assert m, "回放页必须内嵌 state-data JSON"
+    payload = json.loads(m.group(1).replace("<\\/", "</"))
+    agent = payload["agents"]["llm_planner"]
+    assert len(agent["frames"]) == 2 and len(agent["decisions"]) == 1
+    assert agent["decisions"][0]["transcript"][-1]["role"] == "guardrail"
+    out.unlink()
+    print("test_html_replay ok")
+
+
 if __name__ == "__main__":
     test_scenario_structure()
     test_action_mapping()
     test_safety_guard_integration()
     test_rule_planner_closed_loop()
     test_scenario_updates_with_state()
+    test_html_replay()
     print("全部通过")
