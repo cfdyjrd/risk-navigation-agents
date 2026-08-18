@@ -88,3 +88,18 @@ python3 test_experience_store.py
 检索结果进入模型前会被压缩为 `Memory Card`，仅保留经验 ID、相关性依据、
 关键环境条件、动作、结果、风险和结论。完整原始经验仍保存在经验库中，
 但不会在每个 Agent 请求中重复发送，以降低 prompt token 消耗。
+
+## 2D 拓扑仿真闭环
+
+`2d-simulator/` 内置移植自 pku_icra/longsafe-l1 的 2D 拓扑仿真
+（zone 图 + 离散时钟 + 六类授权契约违规判定），并把三 Agent planner
+接入仿真闭环：每个决策步把仿真观测转成 planner 场景，经
+Advocate → Critic → Decision → Safety Guard 得到批准动作后在仿真中执行。
+
+```bash
+python3 2d-simulator/test_sim_bridge.py     # 离线测试，不调用 API
+python3 2d-simulator/run_sim_planner.py     # rule planner，不调用 API
+python3 2d-simulator/run_sim_planner.py --planner llm   # 三 Agent 闭环
+```
+
+详见 `2d-simulator/README.md`。
