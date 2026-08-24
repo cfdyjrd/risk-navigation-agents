@@ -1,105 +1,224 @@
 # Risk Navigation Agents
 
-当前阶段已包含 360 智脑 API 连通性测试和第一个 Task Advocate。
+面向室内移动机器人的风险感知三 Agent 决策原型。系统使用 360 智脑 API
+运行 Task Advocate、Risk Critic 和 Safety Decision Agent，并在模型输出之后
+使用确定性的 Safety Guard 复核动作。
 
-## Mac 上运行
+项目当前重点实现两项机制：
 
-在终端进入本目录，然后仅对当前终端会话设置 API Key：
+1. 分层风险记忆：从历史经历生成 L1 Risk Memory Card，再归纳为可复用的
+   L2 Risk Rule。
+2. 风险感知检索：根据场景、风险严重度、经验可靠性、时效性和 Agent 角色，
+   为三个角色构造不同的证据包。
+
+## 系统流程
+
+```text
+历史经历（L0）
+    ↓ 压缩并保留来源
+Risk Memory Card（L1）
+    ↓ 归纳
+Risk Rule（L2）
+    ↓ 场景匹配与冲突检查
+Task Advocate + Risk Critic
+    ↓
+Safety Decision Agent
+    ↓
+Safety Guard
+    ↓
+机器人执行层（尚未接入）
+```
+
+L2规则目前作为可追溯证据进入三个Agent。若多条L2规则给出互不兼容的建议，
+确定性前置闸门会跳过大模型调用，生成 `safe_stop` 并要求人工复核。
+
+## 三个Agent的职责
+
+- Task Advocate：寻找完成任务的可行方案，优先使用成功经验和有效缓解措施。
+- Risk Critic：主动寻找碰撞、卡死和任务失败等风险，优先使用失败和高严重度经验。
+- Safety Decision Agent：综合场景事实、正反报告、L1卡片和L2规则作出最终裁决。
+
+三个Agent均须通过 `cited_experience_ids` 和 `cited_rule_ids` 显式声明实际使用的
+历史经验与规则。代码会拒绝模型编造的ID。
+
+## 环境配置
+
+项目仅使用Python标准库，不需要安装第三方SDK。建议使用Python 3.10或更高版本。
+
+在Mac终端中安全加载360 API Key：
 
 ```bash
-export ZHINAO_API_KEY='你的 API Key'
-export ZHINAO_BASE_URL='https://api.360.cn/v1'
-export ZHINAO_MODEL='z-ai/glm-5.1'
+read -s "ZHINAO_API_KEY?请输入360 API Key（输入时不会显示）: "
+export ZHINAO_API_KEY
+export ZHINAO_BASE_URL="https://api.360.cn/v1"
+export ZHINAO_MODEL="z-ai/glm-5.1"
+```
+
+检查Key是否加载：
+
+```bash
+if [[ -n "$ZHINAO_API_KEY" ]]; then echo "API Key 已加载"; else echo "API Key 未加载"; fi
+```
+
+不要把真实API Key写入代码、README、`.env.example`或Git。
+
+## API连通性测试
+
+```bash
 python3 test_api.py
 ```
 
-预期输出包含：
+预期输出包含“API连接成功”。该命令会调用360 API并产生Token用量。
 
-```text
-模型：z-ai/glm-5.1
-回复：API连接成功
-```
-
-GLM-5.1 会使用一部分输出额度进行内部推理，因此测试为它预留了
-256 个输出 token。如果接口返回了用量但没有可见回复，通常说明输出
-额度被推理 token 耗尽，并不代表鉴权或网络连接失败。
-
-不要把真实 API Key 写入代码、README、`.env.example` 或 Git。
-
-## 运行 Task Advocate
-
-完成上述环境变量配置后：
+## 运行完整三Agent流程
 
 ```bash
-python3 run_advocate.py
+python3 run_three_agents.py 2>&1 | tee results/latest_three_agents.txt
 ```
 
-程序会读取 `scenarios/corridor_obstacle.json`，调用模型生成支持方报告，
-并检查字段完整性、置信度范围以及动作是否属于允许动作集合。
+程序执行以下步骤：
 
-## 运行 Risk Critic
+1. 为三个角色分别检索L1证据包，每个证据包受1800个估算Token的预算约束。
+2. 匹配当前场景适用的L2规则并检查冲突。
+3. 无规则冲突时运行三个Agent。
+4. 校验每份JSON输出、动作集合、置信度及引用ID。
+5. 使用Safety Guard确定性复核最终动作。
 
-```bash
-python3 run_critic.py
-```
+成功的Agent报告缓存在 `.cache/`。缓存键包含场景、证据包、规则和流程版本，
+相同输入再次运行时可以避免重复调用和重复计费。
 
-Risk Critic 独立分析同一场景，输出分项风险、发生概率、严重程度、
-证据、缓解措施、缺失信息和停止条件。它不会读取 Task Advocate 的结果。
+## 分角色风险感知检索
 
-## 运行完整三 Agent 流程
+历史经历保存在 `experiences/risk_experiences.json`。检索评分包含：
 
-```bash
-python3 run_three_agents.py
-```
+- 场景相似度
+- 风险严重度
+- 经验可靠性
+- 经验时效性
+- Agent角色适配度
+- 重复证据惩罚
 
-程序依次运行 Task Advocate、Risk Critic 和 Safety Decision Agent，验证每份
-结构化输出，并汇总三个角色的 token 用量。每个成功报告会按场景内容缓存在
-`.cache/` 中；某个角色失败后再次运行，只会重试尚未成功的角色及其下游，
-避免重复调用和重复计费。最终模型决策还会经过 `safety_guard.py` 的确定性
-硬规则检查；只有 `Safety Guard.approved_action` 可以交给机器人执行层。
+所有评分分解保存在 `score_breakdown` 中。Advocate、Critic和Decision会获得排序
+不同的证据包。
 
-## 离线测试 Safety Guard
-
-```bash
-python3 test_safety_guard.py
-```
-
-该测试不调用 API，也不产生模型费用。它验证紧急障碍、低观测置信度、
-低电量、过窄通道和非法动作都能覆盖模型提出的不安全动作。
-
-## 风险经验存储与检索
-
-`experiences/risk_experiences.json` 使用统一结构保存任务、机器人、环境、
-动作、结果、风险、决策和经验结论。第一版检索器采用透明的规则相似度，
-根据机器人类型、通行余量、障碍物状态与距离、观测置信度和任务目标排序。
+离线查看检索结果：
 
 ```bash
 python3 run_retrieval.py
-python3 test_experience_store.py
 ```
 
-这两个命令均不调用 API。独立验证检索排序可以减少错误历史经验影响机器人
-决策的风险。
+## L1 Risk Memory Card
 
-完整三 Agent 流程现在会先检索最相关的 3 条经验，将其同时提供给三个角色，
-并要求每份报告通过 `cited_experience_ids` 明确引用经验。缓存键同时包含场景、
-经验内容和流程版本，因此经验库变化后不会错误复用旧决策。
+`experience_store.py` 将完整历史经历压缩为L1卡片，主要字段包括：
 
-检索结果进入模型前会被压缩为 `Memory Card`，仅保留经验 ID、相关性依据、
-关键环境条件、动作、结果、风险和结论。完整原始经验仍保存在经验库中，
-但不会在每个 Agent 请求中重复发送，以降低 prompt token 消耗。
+- `memory_id` 与原始轨迹来源
+- 场景和触发条件
+- 危险类型与严重度
+- 动作、结果和失败原因
+- 缓解措施与停止条件
+- 统计、可靠性和检索评分
+- 指向L2规则的链接
 
-## 2D 拓扑仿真闭环
+完整原始经历仍保存在经验库中，避免在每个Agent请求中反复发送长文本。
 
-`2d-simulator/` 内置移植自 pku_icra/longsafe-l1 的 2D 拓扑仿真
-（zone 图 + 离散时钟 + 六类授权契约违规判定），并把三 Agent planner
-接入仿真闭环：每个决策步把仿真观测转成 planner 场景，经
-Advocate → Critic → Decision → Safety Guard 得到批准动作后在仿真中执行。
+## L2 Risk Rule
+
+正式规则库位于 `experiences/risk_rules.json`。当前窄通道规则由一条失败经历和
+一条成功经历归纳而来：通行总余量不超过0.2米且观测置信度不超过0.8时，
+禁止直接前进，应先重新观测。
+
+查看正式规则的匹配结果：
 
 ```bash
-python3 2d-simulator/test_sim_bridge.py     # 离线测试，不调用 API
-python3 2d-simulator/run_sim_planner.py     # rule planner，不调用 API
-python3 2d-simulator/run_sim_planner.py --planner llm   # 三 Agent 闭环
+python3 run_rule_retrieval.py scenarios/corridor_obstacle.json
 ```
 
-详见 `2d-simulator/README.md`。
+验证规则不会错误匹配宽走廊场景：
+
+```bash
+python3 run_rule_retrieval.py scenarios/wide_corridor_clear.json
+```
+
+预期 `matched_rule_count` 为0。
+
+## L2规则冲突实验
+
+`experiences/risk_rules_conflict_fixture.json` 是专用测试夹具，不属于正式规则库。
+其中故意加入一条过度宽泛的规则，用于制造 `observe_again` 与 `slow_down` 的冲突：
+
+```bash
+python3 run_rule_retrieval.py scenarios/corridor_obstacle.json \
+  --rules experiences/risk_rules_conflict_fixture.json
+```
+
+预期结果：
+
+```json
+{
+  "status": "conflict_detected",
+  "selected_action": "safe_stop",
+  "requires_human_review": true
+}
+```
+
+冲突时系统不会按置信度随意选择某条学习规则，而是采用保守回退。
+
+## A/B对比
+
+已有两份相同场景下的运行记录：
+
+- `results/baseline_l1_memory.txt`：仅使用L1。
+- `results/l2_rule_integration.txt`：使用L1与L2。
+
+生成离线对比报告：
+
+```bash
+python3 compare_memory_runs.py
+```
+
+报告写入 `results/l1_vs_l2_comparison.md`。当前单次实验中，两组均选择
+`observe_again`；L2组增加了显式规则证据和决策可追溯性，但Token增加931
+（约6.36%）。单次运行不能证明L2提高了准确率，后续需要多场景、多次重复实验。
+
+## 自动化测试
+
+运行全部离线测试：
+
+```bash
+python3 -m unittest discover -v
+```
+
+当前共有27项测试，覆盖：
+
+- L1经验加载、压缩、检索、Token预算和角色差异
+- L2规则加载、字段校验、命中和不命中
+- Agent规则引用与虚构ID拦截
+- L2规则冲突检测和确定性 `safe_stop` 闸门
+- Safety Guard紧急障碍、低置信度、低电量、过窄通道和非法动作
+
+这些测试不调用API，不产生模型费用。
+
+## 主要文件
+
+```text
+agents/                            三个Agent的提示词、调用与输出校验
+experiences/risk_experiences.json L0历史经历
+experiences/risk_rules.json       正式L2规则库
+experience_store.py               L1卡片与风险感知检索
+risk_rule_store.py                L2规则加载、匹配和冲突处理
+run_three_agents.py               完整主流程与确定性冲突闸门
+safety_guard.py                   模型之外的硬安全规则
+run_retrieval.py                  L1检索演示
+run_rule_retrieval.py             L2规则匹配演示
+compare_memory_runs.py            L1与L1+L2离线对比
+scenarios/                        实验场景
+results/                          实验输出和对比报告
+test_*.py                         离线自动化测试
+```
+
+## 当前边界
+
+- 尚未连接ROS、Nav2或真实机器人SDK。
+- L2规则目前手工归纳并校验，尚未实现从大量L1卡片自动聚类和自动更新。
+- 学习规则不能替代Safety Guard的硬安全边界。
+- 当前实验规模较小，需要增加场景数量、重复次数和量化指标。

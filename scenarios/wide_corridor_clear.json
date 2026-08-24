@@ -1,0 +1,26 @@
+{
+  "task": {
+    "goal": "到达会议室门口"
+  },
+  "robot": {
+    "type": "mobile_robot",
+    "width_m": 0.55,
+    "battery_percent": 78
+  },
+  "environment": {
+    "distance_to_goal_m": 6.0,
+    "corridor_width_m": 1.2,
+    "obstacle_detected": false,
+    "obstacle_distance_m": null,
+    "observation_confidence": 0.95
+  },
+  "available_actions": [
+    "move_forward",
+    "turn_left",
+    "turn_right",
+    "slow_down",
+    "observe_again",
+    "ask_human",
+    "safe_stop"
+  ]
+}

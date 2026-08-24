@@ -15,22 +15,23 @@ def main() -> int:
     )
     store = ExperienceStore(ROOT / "experiences" / "risk_experiences.json")
     try:
-        results = store.retrieve(scenario, top_k=3)
+        bundles = {
+            role: store.retrieve_memory_cards(
+                scenario,
+                role=role,
+                top_k=3,
+                token_budget=1800,
+            )
+            for role in ("advocate", "critic", "decision")
+        }
     except (ExperienceError, ValueError, json.JSONDecodeError) as exc:
         print(f"风险经验检索失败：{exc}")
         return 1
 
-    print("与当前场景最相关的风险经验：")
-    print(
-        json.dumps(
-            [item.as_dict() for item in results],
-            ensure_ascii=False,
-            indent=2,
-        )
-    )
+    print("面向三个角色的风险记忆证据包：")
+    print(json.dumps(bundles, ensure_ascii=False, indent=2))
     return 0
 
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

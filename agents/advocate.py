@@ -20,6 +20,7 @@ SYSTEM_PROMPT = """
 6. 只输出一个 JSON 对象，不要输出 Markdown 或额外说明。
 7. 保持简洁：assumptions、identified_risks、mitigations 最多各 3 项，每项只写一句话。
 8. 只有真正使用了输入中的历史经验时，才把其 ID 写入 cited_experience_ids；不得编造 ID。
+9. matched_l2_risk_rules 是由多条历史经验归纳出的规则；使用时必须写入 cited_rule_ids。
 
 严格使用以下结构：
 {
@@ -33,6 +34,7 @@ SYSTEM_PROMPT = """
   "identified_risks": ["字符串"],
   "mitigations": ["字符串"],
   "cited_experience_ids": ["输入中真实存在的 experience_id"],
+  "cited_rule_ids": ["输入中真实存在的 rule_id"],
   "confidence": 0.0
 }
 
@@ -48,6 +50,7 @@ REQUIRED_KEYS = {
     "identified_risks",
     "mitigations",
     "cited_experience_ids",
+    "cited_rule_ids",
     "confidence",
 }
 
@@ -56,14 +59,20 @@ def analyze(
     scenario: dict[str, Any],
     client: ZhinaoClient,
     retrieved_experiences: list[dict[str, Any]] | None = None,
+    matched_rules: list[dict[str, Any]] | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     experiences = retrieved_experiences or []
+    rules = matched_rules or []
     report, usage = client.chat_json(
         system_prompt=SYSTEM_PROMPT,
-        user_data={"scenario": scenario, "retrieved_risk_experiences": experiences},
+        user_data={
+            "scenario": scenario,
+            "retrieved_risk_memory_cards": experiences,
+            "matched_l2_risk_rules": rules,
+        },
         max_tokens=5000,
     )
-    validate_report(report, scenario, experiences)
+    validate_report(report, scenario, experiences, rules)
     return report, usage
 
 
@@ -71,6 +80,7 @@ def validate_report(
     report: dict[str, Any],
     scenario: dict[str, Any],
     retrieved_experiences: list[dict[str, Any]] | None = None,
+    matched_rules: list[dict[str, Any]] | None = None,
 ) -> None:
     missing = REQUIRED_KEYS - report.keys()
     if missing:
@@ -95,6 +105,7 @@ def validate_report(
         "identified_risks",
         "mitigations",
         "cited_experience_ids",
+        "cited_rule_ids",
     ):
         if not isinstance(report.get(field), list):
             raise LLMError(f"{field} 必须是数组")
@@ -107,3 +118,12 @@ def validate_report(
     invalid_ids = set(report["cited_experience_ids"]) - valid_ids
     if invalid_ids:
         raise LLMError(f"Task Advocate 引用了不存在的经验 ID: {sorted(invalid_ids)}")
+
+    valid_rule_ids = {
+        item.get("rule_id")
+        for item in (matched_rules or [])
+        if isinstance(item, dict)
+    }
+    invalid_rule_ids = set(report["cited_rule_ids"]) - valid_rule_ids
+    if invalid_rule_ids:
+        raise LLMError(f"Task Advocate 引用了不存在的规则 ID: {sorted(invalid_rule_ids)}")

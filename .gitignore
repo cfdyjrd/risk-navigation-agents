@@ -2,3 +2,6 @@
 __pycache__/
 *.pyc
 .cache/
+.DS_Store
+three_agents_output.txt
+results/*.txt

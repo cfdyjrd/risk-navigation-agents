@@ -1,0 +1,37 @@
+{
+  "schema_version": 1,
+  "rules": [
+    {
+      "rule_id": "rule_narrow_corridor_001",
+      "memory_level": "L2_risk_rule",
+      "risk_type": "narrow_corridor_collision",
+      "trigger_conditions": {
+        "maximum_clearance_m": 0.2,
+        "maximum_observation_confidence": 0.8
+      },
+      "rule": "当通行总余量不超过0.2米且观测置信度低于0.8时，不得直接前进，应先重新观测。",
+      "recommended_actions": [
+        "observe_again"
+      ],
+      "prohibited_actions": [
+        "move_forward"
+      ],
+      "mitigations": [
+        "提高观测置信度",
+        "确认机器人处于通道中心",
+        "确认安全后以低速通过"
+      ],
+      "source_memory_ids": [
+        "rmc_exp_narrow_collision_001",
+        "rmc_exp_narrow_success_002"
+      ],
+      "statistics": {
+        "support": 2,
+        "success": 1,
+        "failure": 1
+      },
+      "confidence": 0.85,
+      "status": "active"
+    }
+  ]
+}

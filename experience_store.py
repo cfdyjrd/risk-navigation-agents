@@ -1,16 +1,24 @@
-"""Local risk-experience storage and transparent similarity retrieval."""
+"""Layered risk-memory cards and transparent risk-aware retrieval."""
 
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
+import math
+import re
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 
 class ExperienceError(ValueError):
     """Raised when an experience record is structurally invalid."""
 
+
+AgentRole = Literal["advocate", "critic", "decision"]
+VALID_ROLES: set[str] = {"advocate", "critic", "decision"}
+MEMORY_SCHEMA_VERSION = 2
+RETRIEVAL_VERSION = "risk-aware-v1"
 
 REQUIRED_FIELDS = {
     "experience_id",
@@ -24,17 +32,53 @@ REQUIRED_FIELDS = {
     "lesson",
 }
 
+ROLE_WEIGHTS: dict[str, dict[str, float]] = {
+    # Advocate needs applicable and reliable success/mitigation evidence.
+    "advocate": {
+        "similarity": 0.35,
+        "severity": 0.05,
+        "reliability": 0.20,
+        "recency": 0.05,
+        "role_fit": 0.35,
+    },
+    # Critic prioritizes high-consequence failure and stop-condition evidence.
+    "critic": {
+        "similarity": 0.30,
+        "severity": 0.25,
+        "reliability": 0.15,
+        "recency": 0.05,
+        "role_fit": 0.25,
+    },
+    # Decision receives a balanced evidence set.
+    "decision": {
+        "similarity": 0.35,
+        "severity": 0.20,
+        "reliability": 0.20,
+        "recency": 0.10,
+        "role_fit": 0.15,
+    },
+}
+
 
 @dataclass(frozen=True)
 class RetrievedExperience:
     score: float
     reasons: list[str]
     experience: dict[str, Any]
+    score_breakdown: dict[str, float] = field(default_factory=dict)
+    role: str = "decision"
+    redundancy_penalty: float = 0.0
 
     def as_dict(self) -> dict[str, Any]:
         return {
             "score": round(self.score, 4),
+            "score_breakdown": {
+                key: round(value, 4)
+                for key, value in self.score_breakdown.items()
+            },
             "match_reasons": self.reasons,
+            "role": self.role,
+            "redundancy_penalty": round(self.redundancy_penalty, 4),
             "experience": self.experience,
         }
 
@@ -59,20 +103,55 @@ class ExperienceStore:
         return data
 
     def retrieve(
-        self, scenario: dict[str, Any], *, top_k: int = 3
+        self,
+        scenario: dict[str, Any],
+        *,
+        top_k: int = 3,
+        role: AgentRole = "decision",
     ) -> list[RetrievedExperience]:
+        """Return risk-aware, role-specific experiences.
+
+        This keeps the old ``retrieve(scenario, top_k=...)`` interface while
+        replacing the old raw-similarity score with an explainable composite.
+        """
         if top_k < 1:
             raise ValueError("top_k 必须大于 0")
-        results = [self._score(scenario, item) for item in self.load()]
-        results = [item for item in results if item.score > 0]
-        results.sort(
-            key=lambda item: (
-                item.score,
-                item.experience["risk"].get("severity", 0),
-            ),
-            reverse=True,
-        )
-        return results[:top_k]
+        _validate_role(role)
+        candidates = [self._score(scenario, item, role) for item in self.load()]
+        candidates = [item for item in candidates if item.score_breakdown["similarity"] > 0]
+        return _select_diverse(candidates, top_k=top_k)
+
+    def retrieve_memory_cards(
+        self,
+        scenario: dict[str, Any],
+        *,
+        role: AgentRole,
+        top_k: int = 3,
+        token_budget: int = 1200,
+    ) -> dict[str, Any]:
+        """Build an auditable evidence bundle within a prompt-token budget."""
+        if token_budget < 1:
+            raise ValueError("token_budget 必须大于 0")
+        retrieved = self.retrieve(scenario, top_k=max(top_k * 3, top_k), role=role)
+        cards: list[dict[str, Any]] = []
+        used_tokens = 0
+        for item in retrieved:
+            card = build_memory_card(item)
+            cost = estimate_tokens(card)
+            if len(cards) >= top_k:
+                break
+            if used_tokens + cost > token_budget:
+                continue
+            card["retrieval"]["estimated_tokens"] = cost
+            cards.append(card)
+            used_tokens += cost
+        return {
+            "role": role,
+            "retrieval_version": RETRIEVAL_VERSION,
+            "token_budget": token_budget,
+            "estimated_tokens_used": used_tokens,
+            "items": cards,
+        }
 
     @staticmethod
     def _validate(item: Any, index: int) -> None:
@@ -93,65 +172,186 @@ class ExperienceStore:
 
     @staticmethod
     def _score(
-        scenario: dict[str, Any], experience: dict[str, Any]
+        scenario: dict[str, Any],
+        experience: dict[str, Any],
+        role: AgentRole = "decision",
     ) -> RetrievedExperience:
-        score = 0.0
-        reasons: list[str] = []
-        robot = scenario.get("robot", {})
-        environment = scenario.get("environment", {})
-        old_robot = experience.get("robot", {})
-        old_environment = experience.get("environment", {})
+        similarity, reasons = _similarity(scenario, experience)
+        components = {
+            "similarity": min(similarity / 10.0, 1.0),
+            "severity": experience["risk"].get("severity", 1) / 5.0,
+            "reliability": _reliability(experience),
+            "recency": _recency(experience),
+            "role_fit": _role_fit(experience, role),
+        }
+        weights = ROLE_WEIGHTS[role]
+        weighted = {
+            key: components[key] * weights[key]
+            for key in components
+        }
+        score = sum(weighted.values())
 
-        if robot.get("type") == old_robot.get("type"):
+        severity = experience["risk"].get("severity", 1)
+        if severity == 5:
+            reasons.append("最高严重度经验进入优先候选")
+        reasons.append(f"面向 {role} 角色完成风险感知精排")
+        breakdown = {
+            **components,
+            **{f"weighted_{key}": value for key, value in weighted.items()},
+        }
+        return RetrievedExperience(
+            score=score,
+            reasons=reasons,
+            experience=experience,
+            score_breakdown=breakdown,
+            role=role,
+        )
+
+
+def _validate_role(role: str) -> None:
+    if role not in VALID_ROLES:
+        raise ValueError(f"role 必须属于 {sorted(VALID_ROLES)}")
+
+
+def _similarity(
+    scenario: dict[str, Any], experience: dict[str, Any]
+) -> tuple[float, list[str]]:
+    """Transparent scenario similarity, normalized later to 0..1."""
+    score = 0.0
+    reasons: list[str] = []
+    robot = scenario.get("robot", {})
+    environment = scenario.get("environment", {})
+    old_robot = experience.get("robot", {})
+    old_environment = experience.get("environment", {})
+
+    if robot.get("type") == old_robot.get("type"):
+        score += 1.5
+        reasons.append("机器人类型相同")
+    if environment.get("obstacle_detected") == old_environment.get("obstacle_detected"):
+        score += 1.0
+        reasons.append("障碍物检测状态相同")
+
+    clearance = _clearance(robot, environment)
+    old_clearance = _clearance(old_robot, old_environment)
+    if clearance is not None and old_clearance is not None:
+        difference = abs(clearance - old_clearance)
+        if difference <= 0.05:
+            score += 3.0
+            reasons.append("通行余量高度相似")
+        elif difference <= 0.15:
             score += 1.5
-            reasons.append("机器人类型相同")
+            reasons.append("通行余量相近")
 
-        if environment.get("obstacle_detected") == old_environment.get(
-            "obstacle_detected"
-        ):
-            score += 1.0
-            reasons.append("障碍物检测状态相同")
+    obstacle_distance = environment.get("obstacle_distance_m")
+    old_obstacle_distance = old_environment.get("obstacle_distance_m")
+    if _number(obstacle_distance) and _number(old_obstacle_distance):
+        difference = abs(float(obstacle_distance) - float(old_obstacle_distance))
+        if difference <= 0.30:
+            score += 2.0
+            reasons.append("障碍物距离高度相似")
+        elif difference <= 1.0:
+            score += 0.75
+            reasons.append("障碍物距离相近")
 
-        clearance = _clearance(robot, environment)
-        old_clearance = _clearance(old_robot, old_environment)
-        if clearance is not None and old_clearance is not None:
-            difference = abs(clearance - old_clearance)
-            if difference <= 0.05:
-                score += 3.0
-                reasons.append("通行余量高度相似")
-            elif difference <= 0.15:
-                score += 1.5
-                reasons.append("通行余量相近")
+    confidence = environment.get("observation_confidence")
+    old_confidence = old_environment.get("observation_confidence")
+    if _number(confidence) and _number(old_confidence):
+        if abs(float(confidence) - float(old_confidence)) <= 0.15:
+            score += 1.5
+            reasons.append("观测置信度相近")
 
-        obstacle_distance = environment.get("obstacle_distance_m")
-        old_obstacle_distance = old_environment.get("obstacle_distance_m")
-        if isinstance(obstacle_distance, (int, float)) and isinstance(
-            old_obstacle_distance, (int, float)
-        ):
-            difference = abs(obstacle_distance - old_obstacle_distance)
-            if difference <= 0.30:
-                score += 2.0
-                reasons.append("障碍物距离高度相似")
-            elif difference <= 1.0:
-                score += 0.75
-                reasons.append("障碍物距离相近")
+    current_goal = scenario.get("task", {}).get("goal", "")
+    old_goal = experience.get("task_goal", "")
+    if current_goal and old_goal and current_goal == old_goal:
+        score += 1.0
+        reasons.append("任务目标相同")
+    return score, reasons
 
-        confidence = environment.get("observation_confidence")
-        old_confidence = old_environment.get("observation_confidence")
-        if isinstance(confidence, (int, float)) and isinstance(
-            old_confidence, (int, float)
-        ):
-            if abs(confidence - old_confidence) <= 0.15:
-                score += 1.5
-                reasons.append("观测置信度相近")
 
-        current_goal = scenario.get("task", {}).get("goal", "")
-        old_goal = experience.get("task_goal", "")
-        if current_goal and old_goal and current_goal == old_goal:
-            score += 1.0
-            reasons.append("任务目标相同")
+def _reliability(experience: dict[str, Any]) -> float:
+    quality = experience.get("quality", {})
+    explicit = quality.get("confidence")
+    if _number(explicit):
+        return _clamp(float(explicit))
+    stats = experience.get("statistics", {})
+    successes = stats.get("success")
+    failures = stats.get("failure")
+    if isinstance(successes, int) and isinstance(failures, int):
+        # Beta(1,1) posterior mean prevents one observation from looking certain.
+        return (successes + 1) / (successes + failures + 2)
+    status = experience.get("outcome", {}).get("status")
+    return {"success": 0.85, "failure": 0.75, "aborted": 0.65}.get(status, 0.5)
 
-        return RetrievedExperience(score=score, reasons=reasons, experience=experience)
+
+def _recency(experience: dict[str, Any]) -> float:
+    stamp = experience.get("quality", {}).get("last_verified_at")
+    if not isinstance(stamp, str) or not stamp:
+        return 0.5
+    try:
+        then = datetime.fromisoformat(stamp.replace("Z", "+00:00"))
+        if then.tzinfo is None:
+            then = then.replace(tzinfo=timezone.utc)
+    except ValueError:
+        return 0.5
+    age_days = max((datetime.now(timezone.utc) - then).total_seconds() / 86400, 0)
+    return math.exp(-age_days / 180.0)
+
+
+def _role_fit(experience: dict[str, Any], role: AgentRole) -> float:
+    status = experience.get("outcome", {}).get("status")
+    severity = experience.get("risk", {}).get("severity", 1)
+    action = experience.get("action", {}).get("name")
+    if role == "advocate":
+        return 1.0 if status == "success" else 0.35
+    if role == "critic":
+        if status in {"failure", "aborted"}:
+            return 1.0
+        if severity >= 4 or action == "safe_stop":
+            return 0.8
+        return 0.4
+    # Decision values both counterexamples and verified mitigations.
+    return 0.9 if status in {"success", "failure"} else 0.7
+
+
+def _select_diverse(
+    candidates: list[RetrievedExperience], *, top_k: int
+) -> list[RetrievedExperience]:
+    """Greedy MMR-style selection with an explicit redundancy penalty."""
+    remaining = list(candidates)
+    selected: list[RetrievedExperience] = []
+    while remaining and len(selected) < top_k:
+        best: RetrievedExperience | None = None
+        best_marginal = -1.0
+        best_penalty = 0.0
+        for item in remaining:
+            penalty = max((_redundancy(item, old) for old in selected), default=0.0)
+            marginal = item.score - 0.15 * penalty
+            if marginal > best_marginal:
+                best, best_marginal, best_penalty = item, marginal, penalty
+        assert best is not None
+        selected.append(
+            RetrievedExperience(
+                score=max(best_marginal, 0.0),
+                reasons=best.reasons,
+                experience=best.experience,
+                score_breakdown=best.score_breakdown,
+                role=best.role,
+                redundancy_penalty=best_penalty,
+            )
+        )
+        remaining.remove(best)
+    return selected
+
+
+def _redundancy(a: RetrievedExperience, b: RetrievedExperience) -> float:
+    score = 0.0
+    if a.experience["risk"].get("type") == b.experience["risk"].get("type"):
+        score += 0.5
+    if a.experience["outcome"].get("status") == b.experience["outcome"].get("status"):
+        score += 0.25
+    if a.experience.get("lesson") == b.experience.get("lesson"):
+        score += 0.25
+    return score
 
 
 def _clearance(
@@ -159,33 +359,117 @@ def _clearance(
 ) -> float | None:
     robot_width = robot.get("width_m")
     corridor_width = environment.get("corridor_width_m")
-    if isinstance(robot_width, (int, float)) and isinstance(
-        corridor_width, (int, float)
-    ):
-        return corridor_width - robot_width
+    if _number(robot_width) and _number(corridor_width):
+        return float(corridor_width) - float(robot_width)
     return None
 
 
+def _number(value: Any) -> bool:
+    return isinstance(value, (int, float)) and not isinstance(value, bool)
+
+
+def _clamp(value: float) -> float:
+    return max(0.0, min(1.0, value))
+
+
 def build_memory_card(item: RetrievedExperience) -> dict[str, Any]:
-    """Compress one retrieved record into an auditable prompt-sized card."""
+    """Compress one retrieved record into an auditable L1 Risk Memory Card."""
     experience = item.experience
     robot = experience.get("robot", {})
     environment = experience.get("environment", {})
+    risk = experience.get("risk", {})
+    outcome = experience.get("outcome", {})
     clearance = _clearance(robot, environment)
-    return {
+    memory_id = experience.get("memory_id", f"rmc_{experience['experience_id']}")
+    mitigation = experience.get("mitigations")
+    if not isinstance(mitigation, list):
+        mitigation = [experience["lesson"]]
+    stop_conditions = experience.get("stop_conditions", [])
+    if not isinstance(stop_conditions, list):
+        stop_conditions = []
+    statistics = experience.get("statistics", {})
+    if not statistics:
+        status = outcome.get("status")
+        statistics = {
+            "support": 1,
+            "success": 1 if status == "success" else 0,
+            "failure": 1 if status == "failure" else 0,
+            "aborted": 1 if status == "aborted" else 0,
+        }
+    reliability = item.score_breakdown.get("reliability", _reliability(experience))
+
+    card = {
+        "schema_version": MEMORY_SCHEMA_VERSION,
+        "memory_level": "L1_risk_memory_card",
+        "memory_id": memory_id,
+        # Kept for backward compatibility with current Agent validators.
         "experience_id": experience["experience_id"],
-        "relevance": {
-            "score": round(item.score, 4),
-            "match_reasons": item.reasons,
+        "source": experience.get(
+            "source",
+            {
+                "trace_id": f"legacy_{experience['experience_id']}",
+                "evidence_span": None,
+            },
+        ),
+        "context": {
+            "robot_type": robot.get("type"),
+            "task_goal": experience.get("task_goal"),
         },
+        "trigger_conditions": {
+            "clearance_m": round(clearance, 3) if clearance is not None else None,
+            "obstacle_detected": environment.get("obstacle_detected"),
+            "obstacle_distance_m": environment.get("obstacle_distance_m"),
+            "observation_confidence": environment.get("observation_confidence"),
+            "battery_percent": robot.get("battery_percent"),
+        },
+        # Alias retained so older displays/tests keep working.
         "key_conditions": {
             "clearance_m": round(clearance, 3) if clearance is not None else None,
             "obstacle_detected": environment.get("obstacle_detected"),
             "obstacle_distance_m": environment.get("obstacle_distance_m"),
             "observation_confidence": environment.get("observation_confidence"),
         },
+        "hazard": {
+            "type": risk.get("type"),
+            "severity": risk.get("severity"),
+        },
         "action": experience["action"],
-        "outcome": experience["outcome"],
-        "risk": experience["risk"],
+        "outcome": outcome,
+        "failure_reason": risk.get("failure_reason"),
+        "mitigations": mitigation,
+        "stop_conditions": stop_conditions,
+        "statistics": statistics,
+        "quality": {
+            "confidence": round(reliability, 4),
+            "last_verified_at": experience.get("quality", {}).get("last_verified_at"),
+        },
+        "rule_links": experience.get("rule_links", []),
+        "retrieval": {
+            "role": item.role,
+            "score": round(item.score, 4),
+            "score_breakdown": {
+                key: round(value, 4)
+                for key, value in item.score_breakdown.items()
+                if not key.startswith("weighted_")
+            },
+            "match_reasons": item.reasons,
+            "redundancy_penalty": round(item.redundancy_penalty, 4),
+            "retrieval_version": RETRIEVAL_VERSION,
+        },
+        # Legacy fields for callers that still render the old card shape.
+        "relevance": {
+            "score": round(item.score, 4),
+            "match_reasons": item.reasons,
+        },
+        "risk": risk,
         "lesson": experience["lesson"],
     }
+    return card
+
+
+def estimate_tokens(value: Any) -> int:
+    """Conservative offline estimate for Chinese/English JSON prompt cost."""
+    text = json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+    cjk = len(re.findall(r"[\u3400-\u9fff]", text))
+    non_cjk = len(re.sub(r"[\s\u3400-\u9fff]", "", text))
+    return cjk + math.ceil(non_cjk / 4)
