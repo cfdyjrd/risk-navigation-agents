@@ -1,0 +1,62 @@
+\documentclass[10pt]{article}
+\usepackage[margin=0.7in]{geometry}
+\usepackage{amsmath,amssymb}
+\usepackage{algorithm}
+\usepackage{algpseudocode}
+\usepackage[T1]{fontenc}
+
+\begin{document}
+
+\begin{algorithm}[t]
+\caption{Overall Risk-aware Decision Procedure}
+\label{alg:overall-decision}
+\begin{algorithmic}[1]
+\Require Scenario $x_t$, L0 experience store $\mathcal{M}^{L0}$,
+         L2 rule store $\mathcal{M}^{L2}$
+\Ensure Approved action $a_t^{\mathrm{app}}$ and decision trace $\mathcal{T}_t$
+
+\For{$k \in \{\mathrm{Advocate},\mathrm{Critic},\mathrm{Decision}\}$}
+    \State $\mathcal{B}_k \gets
+    \Call{RetrieveRiskMemory}{x_t,\mathcal{M}^{L0},k}$
+\EndFor
+\State $\mathcal{Q}_t \gets
+\Call{MatchRiskRules}{x_t,\mathcal{M}^{L2}}$
+\State $c_t \gets \Call{ResolveRuleConflicts}{\mathcal{Q}_t}$
+
+\If{$c_t=\mathrm{conflict}$}
+    \State $\hat{a}_t^{\mathrm{LLM}} \gets \texttt{safe\_stop}$
+    \State $a_t^* \gets \texttt{safe\_stop}$
+\Else
+    \State $d_t^{\mathrm{adv}} \gets
+    \Call{TaskAdvocate}{x_t,\mathcal{B}_{\mathrm{adv}},\mathcal{Q}_t}$
+    \State $d_t^{\mathrm{cri}} \gets
+    \Call{RiskCritic}{x_t,\mathcal{B}_{\mathrm{cri}},\mathcal{Q}_t}$
+    \State $d_t^{\mathrm{dec}} \gets
+    \Call{SafetyDecision}{x_t,\mathcal{B}_{\mathrm{dec}},\mathcal{Q}_t,
+    d_t^{\mathrm{adv}},d_t^{\mathrm{cri}}}$
+    \State $\hat{a}_t^{\mathrm{LLM}} \gets
+    d_t^{\mathrm{dec}}.\mathrm{selected\_action}$
+    \State $\mathcal{A}_t^{\mathrm{safe}} \gets
+    \Call{FilterUnsafeActions}{x_t,\mathcal{Q}_t}$
+    \ForAll{$a\in\mathcal{A}_t^{\mathrm{safe}}$}
+        \State $u_a\gets\Call{TaskUtility}{a}$
+        \State $r_a\gets\Call{ActionRisk}{x_t,a,\mathcal{B}_{\mathrm{dec}}}$
+        \State $q_a\gets\Call{ActionUncertainty}{x_t,a,\mathcal{B}_{\mathrm{dec}},
+        d_t^{\mathrm{adv}},d_t^{\mathrm{cri}},d_t^{\mathrm{dec}}}$
+    \EndFor
+    \State $\mathcal{E}_t\gets\{a\in\mathcal{A}_t^{\mathrm{safe}}\mid
+    r_a\le\tau_R\land q_a\le\tau_Q\}$
+    \If{$\mathcal{E}_t\neq\emptyset$}
+        \State $a_t^*\gets\arg\max_{a\in\mathcal{E}_t}u_a$
+    \Else
+        \State $a_t^*\gets\texttt{safe\_stop}$
+    \EndIf
+\EndIf
+\State $a_t^{\mathrm{app}}\gets\Call{SafetyGuard}{x_t,a_t^*}$
+\State $\mathcal{T}_t\gets\Call{BuildDecisionTrace}{\mathcal{B},\mathcal{Q}_t,
+\hat{a}_t^{\mathrm{LLM}},a_t^*,a_t^{\mathrm{app}}}$
+\State \Return $a_t^{\mathrm{app}},\mathcal{T}_t$
+\end{algorithmic}
+\end{algorithm}
+
+\end{document}

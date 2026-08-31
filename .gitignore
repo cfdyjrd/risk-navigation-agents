@@ -5,3 +5,11 @@ __pycache__/
 .DS_Store
 three_agents_output.txt
 results/*.txt
+# LaTeX temporary files
+*.aux
+*.log
+*.out
+*.toc
+*.synctex.gz
+*.fls
+*.fdb_latexmk
