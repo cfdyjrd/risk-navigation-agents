@@ -19,9 +19,9 @@ $\mathcal A_t$ 表示当前允许执行的候选动作集合。机器人状态�
 以及观测置信度。当前原型采用如下离散动作空间：
 
 $$
-\mathcal A_t=\{\texttt{move\_forward},\texttt{turn\_left},
-\texttt{turn\_right},\texttt{slow\_down},\texttt{observe\_again},
-\texttt{ask\_human},\texttt{safe\_stop}\}.
+\mathcal A_t=\{\mathtt{move\_forward},\mathtt{turn\_left},
+\mathtt{turn\_right},\mathtt{slow\_down},\mathtt{observe\_again},
+\mathtt{ask\_human},\mathtt{safe\_stop}\}.
 $$
 
 系统维护随历史交互积累的分层风险记忆
@@ -52,7 +52,7 @@ $R(\cdot)$ 是相对风险分数，$Q(\cdot)$ 是相对不确定性分数，$\ma
 若不存在同时满足全部约束的候选动作，则采用保守回退：
 
 $$
-a_t^*=\texttt{safe\_stop}.
+a_t^*=\mathtt{safe\_stop}.
 $$
 
 因此，本文并不让大语言模型直接控制机器人，而是将其作为结构化风险推理组件，
