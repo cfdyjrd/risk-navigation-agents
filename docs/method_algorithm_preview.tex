@@ -10,51 +10,71 @@
 \begin{algorithm}[t]
 \caption{Overall Risk-aware Decision Procedure}
 \label{alg:overall-decision}
+\small
 \begin{algorithmic}[1]
-\Require Scenario $x_t$, L0 experience store $\mathcal{M}^{L0}$,
-         L2 rule store $\mathcal{M}^{L2}$
-\Ensure Approved action $a_t^{\mathrm{app}}$ and decision trace $\mathcal{T}_t$
+\Require Scenario $x_t$, L0 store $\mathcal{M}^{L0}$,
+         L2 store $\mathcal{M}^{L2}$, limits $\tau_R,\tau_Q$
+\Ensure Approved action $a_t^{\mathrm{app}}$ or $\bot$,
+        and decision trace $\mathcal{T}_t$
 
-\For{$k \in \{\mathrm{Advocate},\mathrm{Critic},\mathrm{Decision}\}$}
-    \State $\mathcal{B}_k \gets
-    \Call{RetrieveRiskMemory}{x_t,\mathcal{M}^{L0},k}$
+\For{$k \in \{\mathrm{adv},\mathrm{cri},\mathrm{dec}\}$}
+    \State $\mathcal{B}_t^{(k)} \gets
+    \Call{RetrieveRiskMemory}{x_t,\mathcal{M}^{L0},k,K,B_k}$
 \EndFor
 \State $\mathcal{Q}_t \gets
 \Call{MatchRiskRules}{x_t,\mathcal{M}^{L2}}$
-\State $c_t \gets \Call{ResolveRuleConflicts}{\mathcal{Q}_t}$
+\State $\rho_t^{rule} \gets
+\Call{ResolveRuleConflicts}{\mathcal{Q}_t,\mathcal{A}_t}$
 
-\If{$c_t=\mathrm{conflict}$}
-    \State $\hat{a}_t^{\mathrm{LLM}} \gets \texttt{safe\_stop}$
-    \State $a_t^* \gets \texttt{safe\_stop}$
+\If{$\rho_t^{rule}.\mathrm{status}=\mathrm{conflict}$}
+    \State $d_t^{conf} \gets \Call{BuildConflictDecision}{\rho_t^{rule}}$
+    \State $a_t^{\mathrm{app}} \gets
+    \Call{SafetyGuard}{x_t,d_t^{conf}.\mathrm{action}}$
+    \State $\mathcal{T}_t \gets
+    \Call{BuildConflictTrace}{\mathcal{B}_t,\mathcal{Q}_t,
+    \rho_t^{rule},d_t^{conf},a_t^{\mathrm{app}}}$
+    \State \Return $a_t^{\mathrm{app}},\mathcal{T}_t$
+\EndIf
+
+\State $d_t^{\mathrm{adv}} \gets
+\Call{TaskAdvocate}{x_t,\mathcal{B}_t^{(\mathrm{adv})},\mathcal{Q}_t}$
+\If{$\neg\Call{ValidReport}{d_t^{\mathrm{adv}}}$}
+    \State \Return $\bot,\mathrm{error}_{adv}$
+\EndIf
+\State $d_t^{\mathrm{cri}} \gets
+\Call{RiskCritic}{x_t,\mathcal{B}_t^{(\mathrm{cri})},\mathcal{Q}_t}$
+\If{$\neg\Call{ValidReport}{d_t^{\mathrm{cri}}}$}
+    \State \Return $\bot,\mathrm{error}_{cri}$
+\EndIf
+\State $d_t^{\mathrm{dec}} \gets
+\Call{SafetyDecision}{x_t,\mathcal{B}_t^{(\mathrm{dec})},\mathcal{Q}_t,
+d_t^{\mathrm{adv}},d_t^{\mathrm{cri}}}$
+\If{$\neg\Call{ValidReport}{d_t^{\mathrm{dec}}}$}
+    \State \Return $\bot,\mathrm{error}_{dec}$
+\EndIf
+\State $a_t^{\mathrm{LLM}} \gets d_t^{\mathrm{dec}}.\mathrm{action}$
+
+\State $\mathcal{A}_t^{\mathrm{safe}} \gets
+\Call{FilterUnsafeActions}{x_t,\mathcal{Q}_t}$
+\ForAll{$a\in\mathcal{A}_t^{\mathrm{safe}}$}
+    \State $u_a\gets\Call{TaskUtility}{a}$
+    \State $r_a\gets\Call{ActionRisk}{x_t,a,\mathcal{B}_t^{(\mathrm{dec})}}$
+    \State $q_a\gets\Call{ActionUncertainty}{x_t,a,
+    \mathcal{B}_t^{(\mathrm{dec})},d_t^{\mathrm{adv}},d_t^{\mathrm{cri}},
+    d_t^{\mathrm{dec}}}$
+\EndFor
+\State $\mathcal{E}_t\gets\{a\in\mathcal{A}_t^{\mathrm{safe}}\mid
+r_a\le\tau_R\land q_a\le\tau_Q\}$
+\If{$\mathcal{E}_t\neq\emptyset$}
+    \State $a_t^*\gets\Call{DeterministicBest}{\mathcal{E}_t,u,r,q}$
 \Else
-    \State $d_t^{\mathrm{adv}} \gets
-    \Call{TaskAdvocate}{x_t,\mathcal{B}_{\mathrm{adv}},\mathcal{Q}_t}$
-    \State $d_t^{\mathrm{cri}} \gets
-    \Call{RiskCritic}{x_t,\mathcal{B}_{\mathrm{cri}},\mathcal{Q}_t}$
-    \State $d_t^{\mathrm{dec}} \gets
-    \Call{SafetyDecision}{x_t,\mathcal{B}_{\mathrm{dec}},\mathcal{Q}_t,
-    d_t^{\mathrm{adv}},d_t^{\mathrm{cri}}}$
-    \State $\hat{a}_t^{\mathrm{LLM}} \gets
-    d_t^{\mathrm{dec}}.\mathrm{selected\_action}$
-    \State $\mathcal{A}_t^{\mathrm{safe}} \gets
-    \Call{FilterUnsafeActions}{x_t,\mathcal{Q}_t}$
-    \ForAll{$a\in\mathcal{A}_t^{\mathrm{safe}}$}
-        \State $u_a\gets\Call{TaskUtility}{a}$
-        \State $r_a\gets\Call{ActionRisk}{x_t,a,\mathcal{B}_{\mathrm{dec}}}$
-        \State $q_a\gets\Call{ActionUncertainty}{x_t,a,\mathcal{B}_{\mathrm{dec}},
-        d_t^{\mathrm{adv}},d_t^{\mathrm{cri}},d_t^{\mathrm{dec}}}$
-    \EndFor
-    \State $\mathcal{E}_t\gets\{a\in\mathcal{A}_t^{\mathrm{safe}}\mid
-    r_a\le\tau_R\land q_a\le\tau_Q\}$
-    \If{$\mathcal{E}_t\neq\emptyset$}
-        \State $a_t^*\gets\arg\max_{a\in\mathcal{E}_t}u_a$
-    \Else
-        \State $a_t^*\gets\texttt{safe\_stop}$
-    \EndIf
+    \State $a_t^*\gets\Call{ConservativeFallback}{\mathcal{A}_t}$
 \EndIf
 \State $a_t^{\mathrm{app}}\gets\Call{SafetyGuard}{x_t,a_t^*}$
-\State $\mathcal{T}_t\gets\Call{BuildDecisionTrace}{\mathcal{B},\mathcal{Q}_t,
-\hat{a}_t^{\mathrm{LLM}},a_t^*,a_t^{\mathrm{app}}}$
+\State $\mathcal{T}_t\gets
+\Call{BuildDecisionTrace}{\mathcal{B}_t,\mathcal{Q}_t,\rho_t^{rule},
+d_t^{\mathrm{adv}},d_t^{\mathrm{cri}},d_t^{\mathrm{dec}},
+a_t^{\mathrm{LLM}},a_t^*,a_t^{\mathrm{app}}}$
 \State \Return $a_t^{\mathrm{app}},\mathcal{T}_t$
 \end{algorithmic}
 \end{algorithm}
