@@ -3,6 +3,7 @@ __pycache__/
 *.pyc
 .cache/
 .DS_Store
+tmp/
 three_agents_output.txt
 results/*.txt
 # LaTeX temporary files
