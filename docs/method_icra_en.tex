@@ -4,6 +4,7 @@
 \usepackage{amsmath,amssymb}
 \usepackage{booktabs,array}
 \usepackage{multicol}
+\usepackage{algpseudocode}
 \usepackage{microtype}
 \usepackage[hidelinks]{hyperref}
 \setmainfont{Times New Roman}
@@ -45,120 +46,113 @@ $\rightarrow$ \textbf{Execution}
 
 \subsection{System Overview}
 
-We study high-level semantic action selection for an indoor mobile robot in a partially observable environment. At time $t$, the planning input is
-\begin{equation}
-\mathcal{X}_t=(g_t,\,r_t,\,e_t,\,\mathcal{A}_t),
-\end{equation}
-where $g_t$ denotes the task goal and progress, $r_t$ the robot state, $e_t$ the environment observation, and $\mathcal{A}_t$ the finite set of admissible actions. The system maintains history $\mathcal{H}_t$ and supplies task-relevant, traceable risk evidence within a bounded LLM context.
+We study high-level semantic action selection for an indoor mobile robot in a partially observable environment. At time $t$, the planning input $\mathcal{X}_t=(g_t,r_t,e_t,\mathcal{A}_t)$ contains task goal and progress, robot state, environment observation, and a finite admissible action set. The system converts long-term history $\mathcal{H}_t$ into bounded, traceable risk evidence.
 
-Figure~\ref{fig:overview} summarizes the pipeline. Executions form L0 risk experiences, which are compressed into L1 Risk Memory Cards; stable cross-experience patterns form L2 Risk Rules. The retriever builds separate evidence bundles for the Task Advocate, Risk Critic, and Safety Decision Agent. Each agent returns a structured recommendation and the experience and rule IDs it used. A deterministic constrained optimizer selects the action, and an independent Safety Guard verifies it.
-
-Let $\mathcal{D}_t$ denote the three role reports and $\mathcal{Q}_t$ the matched L2 rules. The optimizer removes actions that violate hard constraints or L2 prohibition rules and solves
+Figure~\ref{fig:overview} summarizes the pipeline, whose mathematical thread is
 \begin{equation}
-a_t^*=\arg\max_{a\in\mathcal{F}_t} U(a),\quad
-\text{s.t. } R(a)\leq\rho,\; Z(a)\leq\eta,
+E_i\rightarrow z_i\rightarrow q_i\rightarrow M_i
+\rightarrow(Q_j,c_j)\rightarrow\mathcal{B}_r^*\rightarrow a_t^*.
+\label{eq:pipeline-en}
 \end{equation}
-where $\mathcal{F}_t\subseteq\mathcal{A}_t$ is the feasible set, $U$ is task utility, $R$ is joint scene-and-memory risk, and $Z$ combines observation confidence, memory coverage, and agent disagreement. Both are relative scores, not calibrated probabilities. Any conflicting L2 rules, invalid agent output, empty feasible set, or Safety Guard rejection triggers \code{safe\_stop}, \code{observe\_again}, or human review.
+An L0 experience yields a risk state and single-case evidence, which form an L1 card; related cards produce L2 rules, and role-conditioned retrieval supplies evidence for action selection. The Task Advocate, Risk Critic, and Safety Decision Agent return structured recommendations and evidence IDs. A deterministic optimizer retains action authority, followed by an independent Safety Guard.
 
 \subsection{L0--L1--L2 Hierarchical Risk Memory}
 
-The hierarchy unifies risk experiences, bounds historical context, and preserves provenance from abstract rules to source cases. Its memory graph is
-\begin{equation}
-\mathcal{G}_t=(\mathcal{E}_t,\mathcal{M}_t,\mathcal{Q}_t,\mathcal{L}_t),
-\end{equation}
-where $\mathcal{E}_t$, $\mathcal{M}_t$, and $\mathcal{Q}_t$ are the L0, L1, and L2 nodes, respectively, and $\mathcal{L}_t$ stores provenance links between stable IDs.
+The hierarchy contains L0 experiences $\mathcal{E}_t$, L1 cards $\mathcal{M}_t$, and L2 rules $\mathcal{Q}_t$. Stable IDs connect their provenance, allowing each abstract rule to be traced to cards and source trajectories.
 
 \subsubsection{L0: Embodied Risk Experiences}
 
-L0 retains the interaction evidence required for auditing and re-abstraction. Experience $i$ is
-\begin{equation}
-E_i=(G_i,S_i,A_i,O_i,F_i,K_i,D_i,P_i),
-\end{equation}
-where $G_i$ is the task goal, $S_i$ the robot and environment state, $A_i$ the executed action, $O_i$ the outcome, $F_i$ the failure cause, $K_i$ the risk type and severity, $D_i$ the decision record, and $P_i$ the trajectory provenance and time. This structure links task, state, action, outcome, and risk cause for case reconstruction.
+Each L0 experience $E_i$ records the task, robot and environment state, action $A_i$, outcome $O_i$, failure cause, risk type and severity $\sigma_i\in\{1,\ldots,5\}$, decision, and trajectory provenance. Its immutable \code{experience\_id} links sensor logs, control records, or human labels. Ingestion validates required fields, outcome values, severity, and ID uniqueness.
 
-Each experience has an immutable \code{experience\_id} and may link to sensor logs, control records, or human labels. Ingestion validates required fields, outcome values, severity ranges, and ID uniqueness. Agents receive compressed L1 representations, while L0 retains source evidence for compression and audit.
+A deterministic projection $\psi$ extracts risk state $z_i=[1-\bar c_i,1-\bar d_i,1-p_i,1-b_i,h_i]$. Here $\bar c_i$ and $\bar d_i$ are normalized passage clearance and obstacle distance, $p_i$ is observation confidence, $b_i$ is battery ratio, and $h_i$ encodes robot type, obstacle state, and task. The first four dimensions share a direction: larger values indicate stronger risk factors. L0 retains the full trajectory for audit.
 
 \subsubsection{L1: Risk Memory Cards}
 
-L1 applies a deterministic compression map $C$:
-\begin{equation}
-M_i=C(E_i)=(T_i,H_i,A_i,O_i,F_i,B_i,Q_i,P_i),
-\end{equation}
-where $T_i$ is the trigger, $H_i$ the hazard type and severity, $B_i$ the mitigation and stopping conditions, $Q_i$ the support count, reliability, and last validation time, and $P_i$ the provenance. $T_i$ retains only risk-relevant state, such as passage clearance, obstacle distance, observation confidence, and battery level.
+L1 converts the outcome into single-case evidence $q_i=(\sigma_i/5)\omega(O_i)\gamma_i$, where $\gamma_i\in[0,1]$ is experience reliability and outcome factor $\omega(O_i)$ equals $1$, $0.8$, and $0.05$ for failure, aborted, and success. The value $q_i$ is relative risk evidence, not collision probability. An explicit quality score supplies $\gamma_i$ when available; otherwise it is estimated from smoothed success/failure statistics.
 
-Each card has a stable \code{memory\_id} and stores its \code{experience\_id} and source span. Agents reason over the card, while auditors follow $M_i\rightarrow E_i$ to the trajectory. The card also records its score decomposition and match rationale for reproducibility.
+Substituting $z_i$ and $q_i$ into the compression map derives the L1 card:
+\begin{equation}
+\begin{aligned}
+M_i&=C(E_i)\\
+&=\operatorname{Pack}\!\left(\psi(E_i),A_i,O_i,F_i,B_i,\right.\\
+&\hspace{3.6em}\left.\frac{\sigma_i}{5}\omega(O_i)\gamma_i,\pi_i\right)\\
+&=\operatorname{Pack}\!\left([1-\bar c_i,1-\bar d_i,1-p_i,1-b_i,h_i],\right.\\
+&\hspace{3.6em}\left.A_i,O_i,F_i,B_i,
+\frac{\sigma_i}{5}\omega(O_i)\gamma_i,\pi_i\right).
+\end{aligned}
+\label{eq:card-derivation-en}
+\end{equation}
+Here $F_i$ is the failure cause, $B_i$ contains mitigations and stopping conditions, and $\pi_i$ stores the \code{memory\_id}, \code{experience\_id}, and source span. The three lines of Eq.~\eqref{eq:card-derivation-en} respectively show the source experience, substitution of risk state and outcome evidence, and the resulting card, making the L0-to-L1 construction explicit.
 
 \subsubsection{L2: Risk Rules and Cognitive Evolution}
 
-L2 represents stable patterns across related L1 cards as conditional rules:
+Cards with similar $z_i$, risk type, and action semantics form a pattern set $\mathcal{I}_j$. An aggregator extracts trigger conditions, recommended and prohibited actions, mitigations, and source IDs to form rule $Q_j$. Let $n_j^+$, $n_j^-$, and $n_j^0$ count mitigation successes, risk failures, and inconclusive aborts; the first two are decisive evidence. With a $\operatorname{Beta}(\alpha,\beta)$ prior, rule evidence reliability is
 \begin{equation}
-Q_j=(C_j,K_j,A_j^{+},A_j^{-},B_j,N_j,c_j,z_j),
+\begin{aligned}
+(Q_j,c_j)&=\mathcal{A}(\{M_i\}_{i\in\mathcal{I}_j}),\\
+c_j&=\mathbb{E}[\theta_j\mid\mathcal{I}_j]
+=\frac{n_j^++n_j^-+\alpha}
+{n_j^++n_j^-+n_j^0+\alpha+\beta}.
+\end{aligned}
+\label{eq:rule-en}
 \end{equation}
-where $C_j$ is the trigger, $K_j$ the risk type, $A_j^{+}$ and $A_j^{-}$ the recommended and prohibited actions, $B_j$ the mitigation, $N_j$ the source memory IDs, $c_j$ the confidence, and $z_j\in\{\text{candidate},\text{active},\text{retired}\}$ the lifecycle state. A rule participates only when its trigger holds, and $N_j$ provides the path $Q_j\rightarrow M_i\rightarrow E_i$.
+Here $c_j$ measures whether a pattern has decisive empirical support; it is not the probability of a hazard. A \textit{candidate} becomes \textit{active} after meeting provenance-count, cross-scene-consistency, and reliability thresholds. Conflicting or stale evidence can revise its trigger or mark it \textit{retired}. Each transition preserves prior versions and source IDs, maintaining the chain $Q_j\rightarrow M_i\rightarrow E_i$.
 
-A new trajectory creates an L0 experience; similar experiences update L1 support and reliability; repeated, sufficiently supported patterns create or strengthen candidate L2 rules. Contradictory evidence reduces confidence, revises the trigger range, or retires the rule. Minimum-support thresholds prevent a single failure from producing a strong rule.
-
-At runtime, only \textit{active} rules are matched. The system retains actions recommended by all matched rules and prohibited by none. If this intersection is empty, a deterministic conflict gate stops execution and requests human review.
-
-For reproducible updates, each pattern maintains $n_j=(n_j^{+},n_j^{-},n_j^{0})$, the counts of mitigation successes, risk failures, and human aborts. Without an explicit quality label, reliability is estimated as
-\begin{equation}
-c_j=\frac{n_j^{+}+n_j^{-}+\alpha}
-{n_j^{+}+n_j^{-}+n_j^{0}+\alpha+\beta},
-\end{equation}
-where $\alpha,\beta>0$ suppress extreme confidence from small samples. A candidate becomes \textit{active} after meeting minimum provenance-count, cross-scene-consistency, and confidence thresholds. Persistent conflict, staleness, or counterexamples demote it to \textit{candidate} or \textit{retired}. Each transition creates a new version and retains the previous version and source IDs.
-
-Failures identify prohibited actions and stopping conditions; successes validate mitigations. A rule extends to similar scenes only when both evidence types are represented, limiting conservatism caused by accumulated failures.
+At runtime, only \textit{active} rules are matched. The system retains actions recommended by all matched rules and prohibited by none. If the intersection is empty, a deterministic conflict gate stops execution and requests human review.
 
 \subsection{Role-Conditioned Risk-Aware Retrieval}
 
-Given $\mathcal{X}_t$ and role $r\in\{\mathrm{adv},\mathrm{crit},\mathrm{dec}\}$, the retriever computes deterministic scene similarity from robot type, obstacle state, passage clearance, obstacle distance, observation confidence, and task goal. A positive-similarity candidate is scored by
-\begin{equation}
-\label{eq:role-score-en}
-s_i^{(r)}=\sum_{k\in\mathcal{K}}w_k^{(r)}\phi_{ik},\quad
-\mathcal{K}=\{\mathrm{sim},\mathrm{sev},\mathrm{rel},\mathrm{rec},\mathrm{fit}\},
-\end{equation}
-where $\phi_{ik}\in[0,1]$ denotes scene similarity, risk severity, evidence reliability, recency, or role fit, and role weights $w_k^{(r)}$ sum to one. Reliability uses an explicit quality score when available and a smoothed posterior mean otherwise; recency decays with time since validation.
+Given $\mathcal{X}_t$, each card produces $\phi_i=[\mathrm{sim},\mathrm{sev},\mathrm{rel},\mathrm{rec},\mathrm{fit}]\in[0,1]^5$. Its first three components come from the risk state, outcome evidence, and card quality in Eq.~\eqref{eq:card-derivation-en}; the others encode recency and role fit. Role weights $w^{(r)}$ make the Advocate emphasize successes and mitigations, the Critic failures, severe hazards, and stopping conditions, and the Decision role balance positive and negative cases.
 
-Role conditioning acts through $w_k^{(r)}$ and $\mathrm{fit}$. The Advocate emphasizes successes and effective mitigations, the Critic failures, severe hazards, and stopping conditions, and the Decision role balances positive and negative cases. Thus, each role receives a different experience distribution.
-
-Our auditable baseline uses weights ordered as $(\mathrm{sim},\mathrm{sev},\mathrm{rel},\mathrm{rec},\mathrm{fit})$:
-\begin{align}
-w^{(\mathrm{adv})}&=(.35,.05,.20,.05,.35),\\
-w^{(\mathrm{crit})}&=(.30,.25,.15,.05,.25),\\
-w^{(\mathrm{dec})}&=(.35,.20,.20,.10,.15).
-\end{align}
-These hand-set weights define a reproducible baseline. Ablation and sensitivity analyses isolate the effects of role fit, severity, and reliability.
-
-To prevent near-duplicate cases from occupying Top-$k$, we use greedy diversity selection. Given selected set $S$, the next experience is
+Retrieval jointly optimizes role relevance, case diversity, and context size:
 \begin{equation}
-\label{eq:diversity-en}
-i^*=\arg\max_{i\notin S}\left[s_i^{(r)}-\lambda
-\max_{j\in S} d(i,j)\right],
+\begin{aligned}
+\mathcal{B}_r^*=\arg\max_{\mathcal{B}\subseteq\mathcal{M}_t}\;&
+\sum_{M_i\in\mathcal{B}}(w^{(r)})^\top\phi_i
+-\lambda\!\sum_{\substack{M_i,M_j\in\mathcal{B}\\i<j}}d(i,j)\\
+\text{s.t. }\;&|\mathcal{B}|\leq K,\quad
+\sum_{M_i\in\mathcal{B}}\widehat{\tau}(M_i)\leq B_r .
+\end{aligned}
+\label{eq:retrieval-en}
 \end{equation}
-where $d(i,j)$ measures redundancy in risk type, outcome, and mitigation, and $\lambda$ controls the relevance-diversity trade-off. Selected experiences become L1 cards and are packed into $\mathcal{B}_r$ under budget $B_r$:
-\begin{equation}
-\label{eq:budget-en}
-\sum_{M_i\in\mathcal{B}_r}\widehat{\tau}(M_i)\leq B_r,
-\end{equation}
-where $\widehat{\tau}$ conservatively estimates tokens for bilingual JSON. Cards that exceed the budget are skipped, keeping context bounded as history grows.
+$d(i,j)$ measures redundancy in risk type, outcome, and mitigation, while $\widehat{\tau}$ conservatively estimates card tokens. Ordered as $(\mathrm{sim},\mathrm{sev},\mathrm{rel},\mathrm{rec},\mathrm{fit})$, the reproducible baseline uses $w^{(\mathrm{adv})}=(.35,.05,.20,.05,.35)$, $w^{(\mathrm{crit})}=(.30,.25,.15,.05,.25)$, and $w^{(\mathrm{dec})}=(.35,.20,.20,.10,.15)$; ablations isolate their effects. Algorithm~\ref{alg:retrieval} greedily approximates Eq.~\eqref{eq:retrieval-en}.
 
 The bundle contains the role, retrieval version, budget usage, L1 cards, score decomposition, match rationales, and source IDs, plus matched L2 rules. Agent outputs declare used evidence in \code{cited\_experience\_ids} and \code{cited\_rule\_ids}; IDs absent from the bundle are rejected. These records identify what was retrieved, why, and what the agent cited.
 
-Algorithm~\ref{alg:retrieval} summarizes retrieval. For $N$ experiences and at most $K$ cards per role, feature computation costs $O(N)$ and greedy de-duplication $O(NK)$. Because the context budget fixes $K$, online cost is approximately linear in $N$. Roles share scene features but rank and pack separately.
+Let $\mathcal{D}_t$ denote the three role reports. The deterministic optimizer first constructs feasible set $\mathcal{F}_t$ from hard constraints and matched L2 prohibitions, then uses the Decision bundle to solve
+\begin{equation}
+\begin{aligned}
+a_t^*&=\arg\max_{a\in\mathcal{F}_t}U(a),\\
+R(a\mid\mathcal{B}_{\mathrm{dec}}^*)&\leq\rho,\\
+Z(a\mid\mathcal{D}_t,\mathcal{B}_{\mathrm{dec}}^*)&\leq\eta.
+\end{aligned}
+\label{eq:decision-en}
+\end{equation}
+$R$ combines scene risk with historical evidence from Eq.~\eqref{eq:card-derivation-en}; $Z$ combines observation confidence, memory coverage, and agent disagreement. Both are relative scores. Rule conflict, invalid agent output, an empty feasible set, or Safety Guard rejection triggers \code{safe\_stop}, \code{observe\_again}, or human review. Equation~\eqref{eq:pipeline-en} therefore closes memory construction into executable decision making.
 
 \begin{center}
 \fbox{\begin{minipage}{0.91\columnwidth}
 \refstepcounter{algo}\label{alg:retrieval}
-\textbf{Algorithm~\thealgo: Role-Conditioned Risk Retrieval}\\[-2pt]
-\textbf{Input:} state $\mathcal{X}_t$, role $r$, L0 store $\mathcal{E}$, budget $B_r$, limit $K$.\\
-1) Validate the role and input schema;\\
-2) Compute transparent scene similarity for each experience;\\
-3) Compute severity, reliability, recency, and role fit;\\
-4) Compute $s_i^{(r)}$ using $w^{(r)}$;\\
-5) Greedily select candidates using the penalty in~\eqref{eq:diversity-en};\\
-6) Deterministically compress candidates into L1 cards;\\
-7) Pack cards under~\eqref{eq:budget-en} and append matched L2 rules;\\
-8) Return the bundle with score decomposition, match rationales, and source IDs.
+\textbf{Algorithm~\thealgo: Role-Conditioned Risk Retrieval}
+\begin{algorithmic}[1]
+\footnotesize
+\Require State $\mathcal{X}_t$, roles $\mathcal{R}$, L0 store $\mathcal{E}$, budgets $\{B_r\}$, limit $K$
+\Ensure Role-specific evidence bundles $\{\mathcal{B}_r\}_{r\in\mathcal{R}}$
+\State Validate $\mathcal{X}_t$, $\mathcal{R}$, and $\mathcal{E}$
+\State Build each $M_i=C(E_i)$ by Eq.~\eqref{eq:card-derivation-en}
+\For{each role $r\in\mathcal{R}$}
+  \State Compute all $\phi_i$; initialize candidates $\mathcal{C}_r$ and $\mathcal{B}_r\gets\varnothing$
+  \While{$\mathcal{C}_r\neq\varnothing$ and $|\mathcal{B}_r|<K$}
+    \State Select $M_{i^*}$ by marginal gain in~\eqref{eq:retrieval-en}
+    \State Remove $M_{i^*}$ from $\mathcal{C}_r$
+    \If{$\widehat{\tau}(\mathcal{B}_r)+\widehat{\tau}(M_{i^*})\leq B_r$}
+      \State $\mathcal{B}_r\gets\mathcal{B}_r\cup\{M_{i^*}\}$
+    \EndIf
+  \EndWhile
+  \State Append matched active L2 rules, scores, rationales, and source IDs to $\mathcal{B}_r$
+\EndFor
+\State \Return $\{\mathcal{B}_r\}_{r\in\mathcal{R}}$
+\end{algorithmic}
 \end{minipage}}
 \end{center}
 
