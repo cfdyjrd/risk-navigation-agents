@@ -44,6 +44,21 @@ Safety Decision Agent 的结果是模型建议，不直接进入机器人执行�
 优化器根据任务收益、相对风险和相对不确定性重新选择可行动作，并同时保留
 `model_recommendation`、`optimized_action` 和 `agrees_with_model` 供审计。
 
+## 真机执行接口
+
+`robot_interface.py` 定义了与机器人平台无关的最小接口：读取同步观测、执行一个
+已批准语义动作，以及独立急停。`execution_bridge.py` 在每次下发前读取最新状态，
+将其转换为现有场景结构，再次运行 Safety Guard，并只执行其 `approved_action`。
+输入格式错误、非优化器来源、无效 Guard 输出或平台异常都会触发失效关闭。
+
+后续接入 ROS 2 时，只需实现 `RobotAdapter`，把订阅到的里程计、激光雷达、
+电量和任务状态组成 `RobotObservation`，再把七种语义动作映射为导航目标、速度
+控制、重新观测、人工请求或急停。该适配层不应包含 Agent 或风险推理逻辑。
+
+每次执行完成后，桥接层生成包含执行前场景、批准动作、结果、风险反馈与时间戳的
+L0 记录，可通过 `experience_sink` 写入持久化经验库。正式真机适配器还需负责传感器
+时间同步、命令超时和底盘级急停；当前仓库提供的是平台无关接口及离线契约测试。
+
 三个Agent均须通过 `cited_experience_ids` 和 `cited_rule_ids` 显式声明实际使用的
 历史经验与规则。代码会拒绝模型编造的ID。
 
@@ -232,12 +247,13 @@ python3 compare_memory_runs.py
 python3 -m unittest discover -v
 ```
 
-当前共有62项测试，覆盖：
+当前测试覆盖：
 
 - L1经验加载、压缩、检索、Token预算和角色差异
 - L2规则加载、字段校验、命中和不命中
 - Agent规则引用与虚构ID拦截
 - L2规则冲突检测和确定性 `safe_stop` 闸门
+- 真机观测契约、Guard 后下发、直接模型输出拦截与 L0 回执生成
 - Safety Guard紧急障碍、低置信度、低电量、过窄通道和非法动作
 - 候选动作硬约束与L2禁止规则过滤
 - 任务收益、场景风险、历史记忆风险和三类不确定性计算
