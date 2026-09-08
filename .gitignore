@@ -6,6 +6,7 @@ __pycache__/
 tmp/
 three_agents_output.txt
 results/*.txt
+configs/*.local.json
 # LaTeX temporary files
 *.aux
 *.log

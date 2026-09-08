@@ -1,0 +1,5 @@
+{
+  "robot": {"device_id": "Go2-1", "model": "go2", "max_observation_age_s": 1.0},
+  "connection": {"network_interface": null},
+  "observation_file": null
+}

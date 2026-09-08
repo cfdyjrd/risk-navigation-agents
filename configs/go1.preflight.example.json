@@ -1,0 +1,5 @@
+{
+  "robot": {"device_id": "Go1", "model": "go1", "max_observation_age_s": 1.0},
+  "connection": {"robot_ip": null, "sdk_extension": null, "local_port": 8080, "remote_port": 8082},
+  "observation_file": null
+}

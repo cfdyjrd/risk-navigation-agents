@@ -53,8 +53,15 @@ class SafeExecutionBridge:
             receipt = self.adapter.execute(approved_action)
             receipt.validate()
         except Exception as exc:
-            stop_receipt = self.adapter.emergency_stop(str(exc))
-            stop_receipt.validate()
+            try:
+                stop_receipt = self.adapter.emergency_stop(str(exc))
+                stop_receipt.validate()
+            except Exception as stop_exc:
+                now = datetime.now(timezone.utc).isoformat()
+                stop_receipt = ExecutionReceipt(
+                    "failure", f"Emergency stop failed: {stop_exc}", now, now,
+                    {"stop_submitted": False, "failure_reason": str(stop_exc)},
+                )
             return {
                 "status": "fail_closed",
                 "error": str(exc),

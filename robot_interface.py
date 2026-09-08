@@ -10,6 +10,7 @@ from abc import ABC, abstractmethod
 from copy import deepcopy
 from dataclasses import dataclass, field
 from typing import Any
+import math
 
 
 SEMANTIC_ACTIONS = frozenset(
@@ -60,11 +61,25 @@ class RobotObservation:
             )
 
         confidence = self.environment["observation_confidence"]
-        if not isinstance(confidence, (int, float)) or not 0 <= confidence <= 1:
+        if type(confidence) not in (int, float) or not math.isfinite(confidence) or not 0 <= confidence <= 1:
             raise RobotInterfaceError("observation_confidence must be within [0, 1]")
         distance = self.environment["obstacle_distance_m"]
-        if not isinstance(distance, (int, float)) or distance < 0:
-            raise RobotInterfaceError("obstacle_distance_m must be non-negative")
+        detected = self.environment["obstacle_detected"]
+        if type(detected) is not bool:
+            raise RobotInterfaceError("obstacle_detected must be a boolean")
+        if not (distance is None and detected is False):
+            if type(distance) not in (int, float) or not math.isfinite(distance) or distance < 0:
+                raise RobotInterfaceError("obstacle_distance_m must be finite and non-negative (or null if no obstacle)")
+        for key, low, high in (("width_m", 0, math.inf), ("battery_percent", 0, 100)):
+            value = self.robot[key]
+            if type(value) not in (int, float) or not math.isfinite(value) or not low <= value <= high:
+                raise RobotInterfaceError(f"invalid robot.{key}")
+        if self.robot["width_m"] == 0:
+            raise RobotInterfaceError("robot.width_m must be positive")
+        if "corridor_width_m" in self.environment:
+            width = self.environment["corridor_width_m"]
+            if type(width) not in (int, float) or not math.isfinite(width) or width < 0:
+                raise RobotInterfaceError("corridor_width_m must be finite and non-negative")
 
 
 @dataclass(frozen=True)

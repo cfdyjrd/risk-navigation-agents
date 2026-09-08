@@ -48,7 +48,7 @@ The Task Advocate, Risk Critic, and Safety Decision Agent interpret their assign
 
 \subsection{Traceable Hierarchical Risk Memory}
 
-We construct risk evidence through successive abstraction. L0 experiences $\mathcal{E}_t$ preserve complete interactions, L1 cards $\mathcal{M}_t$ extract the risk structure of individual cases, and L2 rules $\mathcal{Q}_t$ consolidate patterns supported across cases. Stable IDs make every rule traceable through its source cards to the original records. The hierarchy therefore reduces the context required at decision time while retaining the evidence needed to inspect or revise an abstraction.
+We construct risk evidence through successive abstraction. L0 experiences $\mathcal{E}_t$ preserve complete interactions, L1 cards $\mathcal{M}_t$ extract the risk structure of individual cases, and L2 rules $\mathcal{Q}_t$ consolidate patterns supported across cases. Each abstraction retains stable links to its sources. These links are used to verify decision citations, measure the empirical support of a rule, and locate the cases that must be reconsidered when new evidence conflicts with it. The hierarchy therefore reduces decision-time context without detaching an abstraction from the evidence used to validate and update it.
 
 \subsubsection{L0: Embodied Risk Experiences}
 
@@ -72,7 +72,7 @@ M_i&=C(E_i)=\operatorname{Pack}(z_i,A_i,O_i,F_i,B_i,q_i,P_i)\\
 \end{equation}
 Equation~\eqref{eq:card-derivation-en} shows how the risk state, outcome evidence, and provenance of an L0 experience jointly form its traceable L1 card.
 
-\subsubsection{L2: Risk Rules and Cognitive Evolution}
+\subsubsection{L2: Risk Rule Aggregation and Update}
 
 L2 groups cards with similar $z_i$, risk type, and action semantics into pattern set $\mathcal{I}_j$. The aggregation map $\mathcal{A}$ derives rule $Q_j$ from their triggers, recommended and prohibited actions, mitigations, and source IDs. Let $n_j^+$, $n_j^-$, and $n_j^0$ count mitigation successes, risk failures, and inconclusive aborts. We define $\theta_j$ as the probability that a new observation provides decisive evidence for rule $Q_j$. With a $\operatorname{Beta}(\alpha,\beta)$ prior, its posterior mean $c_j$ is
 \begin{equation}
@@ -84,7 +84,7 @@ c_j&=\mathbb{E}[\theta_j\mid\mathcal{I}_j]
 \end{aligned}
 \label{eq:rule-en}
 \end{equation}
-Here $c_j$ measures decisive empirical support, not hazard probability. A rule becomes \textit{active} when its provenance count, cross-scene consistency, and reliability meet preset thresholds; conflicting or stale evidence revises its trigger or marks it \textit{retired}. Versioned source IDs preserve the chain $Q_j\rightarrow M_i\rightarrow E_i$ through every update.
+Here $c_j$ measures decisive empirical support, not hazard probability. The source set of $Q_j$ determines the counts in $c_j$ and is checked before the rule becomes \textit{active}. When a new L0 outcome supports or contradicts the rule, its IDs identify the associated cards, allowing the system to recompute support, revise the trigger, or mark the rule \textit{retired}. Thus, the versioned chain $Q_j\rightarrow M_i\rightarrow E_i$ governs rule validation and maintenance rather than serving only as metadata.
 
 At runtime, the rule gate admits actions recommended by every matched \textit{active} rule and prohibited by none. An empty intersection stops execution and requests human review.
 
@@ -103,9 +103,17 @@ For role $r$, $\mathcal{B}$ denotes a candidate evidence bundle, $K$ limits its 
 \end{aligned}
 \label{eq:retrieval-en}
 \end{equation}
-We use $w^{(\mathrm{adv})}=(.35,.05,.20,.05,.35)$, $w^{(\mathrm{crit})}=(.30,.25,.15,.05,.25)$, and $w^{(\mathrm{dec})}=(.35,.20,.20,.10,.15)$ for $(\mathrm{sim},\mathrm{sev},\mathrm{rel},\mathrm{rec},\mathrm{fit})$. Algorithm~\ref{alg:retrieval} greedily approximates Eq.~\eqref{eq:retrieval-en}; the experiments evaluate the role-specific weighting.
+For $(\mathrm{sim},\mathrm{sev},\mathrm{rel},\mathrm{rec},\mathrm{fit})$, we use
+\[
+\begin{aligned}
+w^{(\mathrm{adv})}&=(0.35,0.05,0.20,0.05,0.35),\\
+w^{(\mathrm{crit})}&=(0.30,0.25,0.15,0.05,0.25),\\
+w^{(\mathrm{dec})}&=(0.35,0.20,0.20,0.10,0.15).
+\end{aligned}
+\]
+Algorithm~\ref{alg:retrieval} greedily approximates Eq.~\eqref{eq:retrieval-en}; the experiments evaluate the role-specific weighting.
 
-Each bundle stores its role and retrieval version, selected L1 cards and L2 rules, scores, rationales, budget use, and source IDs. Agents declare used evidence through \code{cited\_experience\_ids} and \code{cited\_rule\_ids}; the framework rejects IDs absent from the bundle, preserving a complete retrieval-to-decision audit trail.
+Each bundle stores its role and retrieval version, selected L1 cards and matched L2 rules, scores, rationales, budget use, and source IDs. A matched rule constrains the feasible actions, while its source set records which cases support that constraint. Agents declare the evidence used through \code{cited\_experience\_ids} and \code{cited\_rule\_ids}; IDs absent from the assigned bundle are rejected. The accepted IDs are retained with the optimizer and Guard outputs, linking an executed or rejected action to the rule and cases that informed it.
 
 Let $\mathcal{D}_t$ denote the three role reports and $\mathcal{F}_t$ the actions that satisfy hard constraints and matched L2 prohibitions. For action $a$, $U(a)$ is task utility, $R(a\mid\mathcal{B}_{\mathrm{dec}}^*)$ is the combined scene-memory risk, and $Z(a\mid\mathcal{D}_t,\mathcal{B}_{\mathrm{dec}}^*)$ is uncertainty from observation confidence, memory coverage, and role disagreement. The thresholds $\rho$ and $\eta$ bound these relative scores. The deterministic optimizer selects
 \begin{equation}

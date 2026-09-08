@@ -50,7 +50,7 @@ Task Advocate、Risk Critic 和 Safety Decision Agent 分别解释所分配的�
 
 \subsection{可追溯的分层风险记忆}
 
-本文通过逐层抽象构造风险证据。L0 经历集 $\mathcal{E}_t$ 保留完整交互，L1 卡片集 $\mathcal{M}_t$ 提取单个案例的风险结构，L2 规则集 $\mathcal{Q}_t$ 归纳由多个案例共同支持的风险模式。稳定 ID 使每条规则能够经由来源卡片追溯至原始记录。因此，该层次结构既减少决策时需要加载的历史上下文，也保留检查和修订抽象结果所需的证据。
+本文通过逐层抽象构造风险证据。L0 经历集 $\mathcal{E}_t$ 保留完整交互，L1 卡片集 $\mathcal{M}_t$ 提取单个案例的风险结构，L2 规则集 $\mathcal{Q}_t$ 归纳由多个案例共同支持的风险模式。每层抽象均通过稳定 ID 关联其来源；这些关联用于校验决策引用、衡量规则的经验支持，并在新证据与规则冲突时定位需要重新评估的案例。因此，该层次结构在压缩决策上下文的同时，使抽象结果仍能由原始证据验证和更新。
 
 \subsubsection{L0：具身风险经历表示}
 
@@ -74,7 +74,7 @@ M_i&=C(E_i)=\operatorname{Pack}(z_i,A_i,O_i,F_i,B_i,q_i,P_i)\\
 \end{equation}
 式~\eqref{eq:card-derivation-zh} 表明，L0 经历的风险状态、结果证据和来源记录共同构成可追溯的 L1 卡片。
 
-\subsubsection{L2：风险规则与认知演化}
+\subsubsection{L2：风险规则聚合与更新}
 
 L2 将风险状态、风险类型和动作语义相近的卡片组成模式集合 $\mathcal{I}_j$。聚合映射 $\mathcal{A}$ 根据其中的触发条件、建议与禁止动作、缓解措施和来源 ID 生成规则 $Q_j$。令 $n_j^+$、$n_j^-$ 和 $n_j^0$ 分别表示缓解成功、风险失败和未决中止次数，并以 $\theta_j$ 表示新观测为规则 $Q_j$ 提供明确证据的概率。采用 $\operatorname{Beta}(\alpha,\beta)$ 先验，其后验均值 $c_j$ 为
 \begin{equation}
@@ -86,7 +86,7 @@ c_j&=\mathbb{E}[\theta_j\mid\mathcal{I}_j]
 \end{aligned}
 \label{eq:rule-zh}
 \end{equation}
-这里 $c_j$ 衡量明确经验支持的程度，而非风险发生概率。当来源数、跨场景一致性和可靠性达到预设阈值时，规则转为 \textit{active}；矛盾或过期证据将修订其触发范围或使其转为 \textit{retired}。版本化来源 ID 在更新中始终保留 $Q_j\rightarrow M_i\rightarrow E_i$ 的证据链。
+这里 $c_j$ 衡量明确经验支持的程度，而非风险发生概率。$Q_j$ 的来源集合决定 $c_j$ 中的计数，并在规则转为 \textit{active} 前接受一致性检查。当新的 L0 结果支持或反驳该规则时，来源 ID 用于定位相关卡片，进而重新计算支持度、修订触发条件或将规则转为 \textit{retired}。因此，版本化的 $Q_j\rightarrow M_i\rightarrow E_i$ 链参与规则验证与维护，而非仅作为附加元数据保存。
 
 运行时，规则闸门仅允许所有命中 \textit{active} 规则共同建议且均未禁止的动作；若交集为空，则停止执行并请求人工复核。
 
@@ -105,9 +105,17 @@ c_j&=\mathbb{E}[\theta_j\mid\mathcal{I}_j]
 \end{aligned}
 \label{eq:retrieval-zh}
 \end{equation}
-对于 $(\mathrm{sim},\mathrm{sev},\mathrm{rel},\mathrm{rec},\mathrm{fit})$，本文取 $w^{(\mathrm{adv})}=(.35,.05,.20,.05,.35)$、$w^{(\mathrm{crit})}=(.30,.25,.15,.05,.25)$ 和 $w^{(\mathrm{dec})}=(.35,.20,.20,.10,.15)$。算法~\ref{alg:retrieval} 以贪心边际增益近似求解式~\eqref{eq:retrieval-zh}，实验部分评估分角色权重的作用。
+对于 $(\mathrm{sim},\mathrm{sev},\mathrm{rel},\mathrm{rec},\mathrm{fit})$，本文取
+\[
+\begin{aligned}
+w^{(\mathrm{adv})}&=(0.35,0.05,0.20,0.05,0.35),\\
+w^{(\mathrm{crit})}&=(0.30,0.25,0.15,0.05,0.25),\\
+w^{(\mathrm{dec})}&=(0.35,0.20,0.20,0.10,0.15).
+\end{aligned}
+\]
+算法~\ref{alg:retrieval} 以贪心边际增益近似求解式~\eqref{eq:retrieval-zh}，实验部分评估分角色权重的作用。
 
-每个证据包记录角色与检索版本、选中的 L1 卡片和 L2 规则、得分、匹配原因、预算用量及来源 ID。Agent 通过 \code{cited\_experience\_ids} 和 \code{cited\_rule\_ids} 声明所用证据；框架拒绝证据包外的 ID，从而保留完整的检索至决策审计链。
+每个证据包记录角色与检索版本、选中的 L1 卡片和命中的 L2 规则、得分、匹配原因、预算用量及来源 ID。命中规则约束可行动作，其来源集合则记录该约束由哪些案例支持。Agent 通过 \code{cited\_experience\_ids} 和 \code{cited\_rule\_ids} 声明所用证据，框架拒绝证据包外的 ID，并将合法引用与优化器及 Safety Guard 输出共同保存，从而把动作的执行或拒绝关联到相应规则及其来源案例。
 
 令 $\mathcal{D}_t$ 表示三个角色的报告，$\mathcal{F}_t$ 表示满足硬约束和 L2 禁止规则的动作集合。对于动作 $a$，$U(a)$ 是任务效用，$R(a\mid\mathcal{B}_{\mathrm{dec}}^*)$ 是场景与记忆的联合风险，$Z(a\mid\mathcal{D}_t,\mathcal{B}_{\mathrm{dec}}^*)$ 是由观测置信度、记忆覆盖和角色分歧形成的不确定性。阈值 $\rho$ 和 $\eta$ 分别限制这两个相对分数。确定性优化器选择
 \begin{equation}
