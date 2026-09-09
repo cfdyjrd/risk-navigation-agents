@@ -26,29 +26,30 @@
 
 \begin{center}
 \fbox{\begin{minipage}{0.94\textwidth}\centering
-\textbf{Traceable Risk Abstraction:}
+\textbf{Core Mechanism I -- Traceable Risk Abstraction:}
 L0 Experiences $\mid$ L1 Memory Cards $\mid$ L2 Risk Rules\\[3pt]
-\textbf{Responsibility-Specific Evidence Allocation:}
+\textbf{Core Mechanism II -- Responsibility-Specific Evidence Allocation:}
 Task Advocate $\mid$ Risk Critic $\mid$ Safety Decision Agent\\[3pt]
 \textbf{Execution Boundary:}
 Structured Advice $\mid$ Constrained Optimizer $\mid$ Safety Guard
 \end{minipage}}
 \refstepcounter{figure}\label{fig:overview}
 \vspace{2pt}
-{\small Fig.~\thefigure: Method overview. The framework constructs traceable risk evidence, allocates it by decision responsibility, and separates semantic advice from action execution.}
+{\small Fig.~\thefigure: Method overview. Two coupled mechanisms transform interaction history into traceable risk abstractions and allocate them by decision responsibility; deterministic modules retain execution authority.}
 \end{center}
 
 \begin{multicols}{2}
+\raggedcolumns
 
 \subsection{System Overview}
 
-We propose a risk-experience-driven multi-role framework built around two coupled operations: \emph{traceable risk abstraction} and \emph{responsibility-specific evidence allocation}. Given interaction history $\mathcal{H}_t$, the first operation derives case-level memory cards and cross-case risk rules while retaining links to the original interaction records. Given the current planning input $\mathcal{X}_t=(g_t,r_t,e_t,\mathcal{A}_t)$, the second operation constructs a distinct evidence bundle for each decision role. Their coupling allows a decision to use compact long-term evidence without losing its empirical provenance.
+We propose a risk-experience-driven multi-role framework whose key novelty is the coupling of \emph{traceable risk abstraction} and \emph{responsibility-specific evidence allocation}. Given interaction history $\mathcal{H}_t$, the first mechanism converts complete interactions into compact case-level cards and cross-case rules while preserving the evidence supporting each abstraction. Given the current planning input $\mathcal{X}_t=(g_t,r_t,e_t,\mathcal{A}_t)$, the second mechanism selects a different evidence bundle for each decision responsibility. Consequently, long-term experience is compressed according to its risk structure and then exposed selectively according to how it will be used in deliberation.
 
-The Task Advocate, Risk Critic, and Safety Decision Agent interpret their assigned evidence and return structured recommendations with cited evidence IDs. They do not issue executable controls. A constrained optimizer computes the final semantic action from the admissible set $\mathcal{A}_t$, and an independent Safety Guard validates it before execution. Section 3.2 presents the construction of traceable evidence; Section 3.3 presents its role-conditioned allocation and use.
+The Task Advocate, Risk Critic, and Safety Decision Agent interpret their assigned evidence and return structured recommendations with cited evidence IDs. A constrained optimizer then selects a semantic action from the admissible set $\mathcal{A}_t$, and an independent Safety Guard validates it before execution. The agents therefore provide evidence-grounded semantics but never executable control. Section 3.2 defines the traceable abstraction mechanism; Section 3.3 defines responsibility-specific allocation and its integration with decision making.
 
 \subsection{Traceable Hierarchical Risk Memory}
 
-We construct risk evidence through successive abstraction. L0 experiences $\mathcal{E}_t$ preserve complete interactions, L1 cards $\mathcal{M}_t$ extract the risk structure of individual cases, and L2 rules $\mathcal{Q}_t$ consolidate patterns supported across cases. Each abstraction retains stable links to its sources. These links are used to verify decision citations, measure the empirical support of a rule, and locate the cases that must be reconsidered when new evidence conflicts with it. The hierarchy therefore reduces decision-time context without detaching an abstraction from the evidence used to validate and update it.
+Our first mechanism constructs a hierarchy in which each level has a distinct decision function. L0 experiences $\mathcal{E}_t$ preserve complete interactions, L1 cards $\mathcal{M}_t$ expose the risk structure of individual cases, and L2 rules $\mathcal{Q}_t$ encode patterns supported across cases. The defining property is traceable abstraction: every compression step retains stable links to its inputs. The links determine rule support, validate decision citations, and identify the cases affected by later contradictory evidence. Thus, the hierarchy reduces decision-time context while keeping each abstraction empirically verifiable and updatable.
 
 \subsubsection{L0: Embodied Risk Experiences}
 
@@ -90,7 +91,7 @@ At runtime, the rule gate admits actions recommended by every matched \textit{ac
 
 \subsection{Role-Conditioned Risk Evidence Retrieval}
 
-The same risk history serves different decision responsibilities. We therefore allocate evidence by role instead of supplying one shared retrieval result. The Advocate receives evidence about feasible progress and successful mitigation, the Critic receives failures and stopping conditions, and the Decision agent receives evidence needed to balance task utility and risk. Given $\mathcal{X}_t$, each card yields $\phi_i=[\mathrm{sim},\mathrm{sev},\mathrm{rel},\mathrm{rec},\mathrm{fit}]\in[0,1]^5$, describing contextual similarity, severity, reliability, recency, and role fit. Role-specific weights $w^{(r)}$ turn these common card features into responsibility-specific relevance.
+Our second mechanism conditions evidence allocation on decision responsibility. For the same state and memory, the Advocate prioritizes feasible progress and successful mitigation, the Critic prioritizes failures and stopping conditions, and the Decision agent prioritizes evidence for balancing task utility and risk. The novelty lies in applying the role condition inside retrieval, rather than using roles only to interpret a common evidence set. Given $\mathcal{X}_t$, each card yields $\phi_i=[\mathrm{sim},\mathrm{sev},\mathrm{rel},\mathrm{rec},\mathrm{fit}]\in[0,1]^5$, describing contextual similarity, severity, reliability, recency, and role fit. Role-specific weights $w^{(r)}$ convert these common features into responsibility-specific relevance.
 
 For role $r$, $\mathcal{B}$ denotes a candidate evidence bundle, $K$ limits its card count, and $B_r$ is its token budget. The redundancy measure $d(i,j)$ discourages repeated risk types, outcomes, and mitigations; $\widehat{\tau}(M_i)$ estimates the token cost of card $M_i$, and $\lambda$ controls the redundancy penalty. Retrieval then selects
 \begin{equation}
@@ -124,7 +125,7 @@ Z(a\mid\mathcal{D}_t,\mathcal{B}_{\mathrm{dec}}^*)&\leq\eta.
 \end{aligned}
 \label{eq:decision-en}
 \end{equation}
-Rule conflict, invalid output, an empty feasible set, or Guard rejection triggers \code{safe\_stop}, \code{observe\_again}, or human review. This execution boundary lets the agents interpret retrieved evidence while deterministic modules retain action authority.
+Rule conflict, invalid output, an empty feasible set, or Guard rejection triggers \code{safe\_stop}, \code{observe\_again}, or human review. This deterministic boundary supports the two memory mechanisms by preventing semantic recommendations from bypassing action constraints.
 
 \begin{center}
 \fbox{\begin{minipage}{0.91\columnwidth}

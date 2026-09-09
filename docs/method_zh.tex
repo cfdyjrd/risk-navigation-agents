@@ -28,29 +28,30 @@
 
 \begin{center}
 \fbox{\begin{minipage}{0.94\textwidth}\centering
-\textbf{可追溯风险抽象：}
+\textbf{核心机制一：可追溯风险抽象：}
 L0 原始经历 $\mid$ L1 风险记忆卡 $\mid$ L2 风险规则\\[3pt]
-\textbf{面向职责的证据分配：}
+\textbf{核心机制二：面向职责的证据分配：}
 Task Advocate $\mid$ Risk Critic $\mid$ Safety Decision Agent\\[3pt]
 \textbf{执行权限边界：}
 结构化建议 $\mid$ 确定性约束优化器 $\mid$ Safety Guard
 \end{minipage}}
 \refstepcounter{figure}\label{fig:overview}
 \vspace{2pt}
-{\small 图~\thefigure：方法概览。框架构造可追溯的风险证据，按决策职责分配证据，并分离语义建议与动作执行。}
+{\small 图~\thefigure：方法概览。两个耦合机制将交互历史转化为可追溯的风险抽象，并按决策职责分配证据；确定性模块保留执行权限。}
 \end{center}
 
 \begin{multicols}{2}
+\raggedcolumns
 
 \subsection{系统概览}
 
-本文提出一种风险经验驱动的多角色框架，其核心包含两个相互衔接的操作：\textbf{可追溯风险抽象}与\textbf{面向职责的证据分配}。给定交互历史 $\mathcal{H}_t$，前者逐步生成单案例记忆卡和跨案例风险规则，并保留它们与原始交互记录的关联。给定当前规划输入 $\mathcal{X}_t=(g_t,r_t,e_t,\mathcal{A}_t)$，后者为每个决策角色构造不同的证据包。二者结合，使系统能够使用紧凑的长期风险证据，同时保留其经验来源。
+本文提出一种风险经验驱动的多角色框架，其核心创新是将\textbf{可追溯风险抽象}与\textbf{面向职责的证据分配}相互耦合。给定交互历史 $\mathcal{H}_t$，第一项机制将完整交互转化为紧凑的单案例卡片和跨案例规则，同时保留支撑每层抽象的证据。给定当前规划输入 $\mathcal{X}_t=(g_t,r_t,e_t,\mathcal{A}_t)$，第二项机制针对不同决策职责选择不同的证据包。因此，长期经验首先按风险结构压缩，再根据其在协商中的用途选择性呈现。
 
-Task Advocate、Risk Critic 和 Safety Decision Agent 分别解释所分配的证据，并输出包含证据 ID 的结构化建议，不直接产生可执行控制。确定性约束优化器从允许动作集 $\mathcal{A}_t$ 中计算最终语义动作，独立 Safety Guard 在执行前对其进行验证。第 3.2 节说明可追溯风险证据的构造，第 3.3 节说明证据的角色条件化分配及其决策用途。
+Task Advocate、Risk Critic 和 Safety Decision Agent 分别解释所分配的证据，并输出包含证据 ID 的结构化建议。确定性约束优化器随后从允许动作集 $\mathcal{A}_t$ 中选择语义动作，独立 Safety Guard 在执行前对其进行验证。因此，Agent 提供由证据支撑的语义判断，但不拥有可执行控制权限。第 3.2 节定义可追溯抽象机制，第 3.3 节定义面向职责的证据分配及其决策集成。
 
 \subsection{可追溯的分层风险记忆}
 
-本文通过逐层抽象构造风险证据。L0 经历集 $\mathcal{E}_t$ 保留完整交互，L1 卡片集 $\mathcal{M}_t$ 提取单个案例的风险结构，L2 规则集 $\mathcal{Q}_t$ 归纳由多个案例共同支持的风险模式。每层抽象均通过稳定 ID 关联其来源；这些关联用于校验决策引用、衡量规则的经验支持，并在新证据与规则冲突时定位需要重新评估的案例。因此，该层次结构在压缩决策上下文的同时，使抽象结果仍能由原始证据验证和更新。
+第一项机制构造了具有明确决策功能的分层记忆：L0 经历集 $\mathcal{E}_t$ 保留完整交互，L1 卡片集 $\mathcal{M}_t$ 显式提取单个案例的风险结构，L2 规则集 $\mathcal{Q}_t$ 编码由多个案例共同支持的模式。其关键性质是可追溯抽象，即每次压缩均通过稳定 ID 保留与输入证据的关联。这些关联用于计算规则支持度、校验决策引用，并在新证据与规则冲突时定位受影响的案例。因此，该层次结构既压缩决策上下文，又使每层抽象能够由经验验证和更新。
 
 \subsubsection{L0：具身风险经历表示}
 
@@ -92,7 +93,7 @@ c_j&=\mathbb{E}[\theta_j\mid\mathcal{I}_j]
 
 \subsection{角色条件化的风险证据检索}
 
-同一风险历史服务于不同的决策职责，因此本文按角色分配证据，而非向所有角色提供同一检索结果。Advocate 接收与任务推进和成功缓解相关的证据，Critic 接收失败案例与停止条件，Decision Agent 接收用于权衡任务收益与风险的证据。给定 $\mathcal{X}_t$，每张卡片产生特征向量 $\phi_i=[\mathrm{sim},\mathrm{sev},\mathrm{rel},\mathrm{rec},\mathrm{fit}]\in[0,1]^5$，分别表示情境相似度、严重度、可靠性、时效性和角色适配度。角色权重 $w^{(r)}$ 将这些公共特征转化为面向职责的相关性。
+第二项机制以决策职责为条件分配证据。在相同状态和记忆下，Advocate 优先获取任务推进与成功缓解证据，Critic 优先获取失败案例与停止条件，Decision Agent 优先获取用于权衡任务收益和风险的证据。其关键不只是设置多个角色，而是将角色条件置于检索过程内部，使不同职责在协商前即获得不同证据。给定 $\mathcal{X}_t$，每张卡片产生特征向量 $\phi_i=[\mathrm{sim},\mathrm{sev},\mathrm{rel},\mathrm{rec},\mathrm{fit}]\in[0,1]^5$，分别表示情境相似度、严重度、可靠性、时效性和角色适配度。角色权重 $w^{(r)}$ 将这些公共特征转化为面向职责的相关性。
 
 对于角色 $r$，$\mathcal{B}$ 表示候选证据包，$K$ 限制卡片数量，$B_r$ 是 Token 预算。冗余度 $d(i,j)$ 用于减少风险类型、结果和缓解措施重复的案例，$\widehat{\tau}(M_i)$ 估计卡片 $M_i$ 的 Token 开销，$\lambda$ 控制冗余惩罚。检索据此选择
 \begin{equation}
@@ -117,7 +118,12 @@ w^{(\mathrm{dec})}&=(0.35,0.20,0.20,0.10,0.15).
 
 每个证据包记录角色与检索版本、选中的 L1 卡片和命中的 L2 规则、得分、匹配原因、预算用量及来源 ID。命中规则约束可行动作，其来源集合则记录该约束由哪些案例支持。Agent 通过 \code{cited\_experience\_ids} 和 \code{cited\_rule\_ids} 声明所用证据，框架拒绝证据包外的 ID，并将合法引用与优化器及 Safety Guard 输出共同保存，从而把动作的执行或拒绝关联到相应规则及其来源案例。
 
-令 $\mathcal{D}_t$ 表示三个角色的报告，$\mathcal{F}_t$ 表示满足硬约束和 L2 禁止规则的动作集合。对于动作 $a$，$U(a)$ 是任务效用，$R(a\mid\mathcal{B}_{\mathrm{dec}}^*)$ 是场景与记忆的联合风险，$Z(a\mid\mathcal{D}_t,\mathcal{B}_{\mathrm{dec}}^*)$ 是由观测置信度、记忆覆盖和角色分歧形成的不确定性。阈值 $\rho$ 和 $\eta$ 分别限制这两个相对分数。确定性优化器选择
+令 $\mathcal{D}_t$ 表示三个角色的报告，$\mathcal{F}_t$ 表示满足硬约束和 L2 禁止规则的动作集合。对于动作 $a$，$U(a)$ 是任务效用，$R(a\mid\mathcal{B}_{\mathrm{dec}}^*)$ 是场景与记忆的联合风险，$Z(a\mid\mathcal{D}_t,\mathcal{B}_{\mathrm{dec}}^*)$ 综合观测置信度、记忆覆盖和角色分歧。
+
+阈值 $\rho$ 和 $\eta$ 分别约束风险和不确定性。
+
+\columnbreak
+确定性优化器选择
 \begin{equation}
 \begin{aligned}
 a_t^*&=\arg\max_{a\in\mathcal{F}_t}U(a),\\
@@ -126,7 +132,7 @@ Z(a\mid\mathcal{D}_t,\mathcal{B}_{\mathrm{dec}}^*)&\leq\eta.
 \end{aligned}
 \label{eq:decision-zh}
 \end{equation}
-规则冲突、输出无效、可行集为空或 Safety Guard 拒绝动作时，框架触发 \code{safe\_stop}、\code{observe\_again} 或人工复核。该执行边界允许 Agent 解释检索证据，同时由确定性模块保留动作权限。
+规则冲突、输出无效、可行集为空或 Safety Guard 拒绝动作时，框架触发 \code{safe\_stop}、\code{observe\_again} 或人工复核。该确定性边界为上述两项记忆机制提供执行保障，防止语义建议绕过动作约束。
 
 \begin{center}
 \fbox{\begin{minipage}{0.91\columnwidth}
