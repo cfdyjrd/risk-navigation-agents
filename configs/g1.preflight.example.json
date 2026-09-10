@@ -1,0 +1,14 @@
+{
+  "robot": {
+    "device_id": "G1",
+    "model": "g1",
+    "max_speed_mps": 0.1,
+    "slow_speed_mps": 0.05,
+    "max_yaw_rate_rps": 0.2,
+    "max_duration_s": 0.5,
+    "allowed_fsm_ids": [],
+    "max_tilt_rad": null
+  },
+  "connection": {"network_interface": "eth0"},
+  "observation_file": null
+}

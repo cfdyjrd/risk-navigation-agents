@@ -1,5 +1,7 @@
 """Run the first end-to-end three-agent deliberation."""
 
+from __future__ import annotations
+
 import json
 import hashlib
 from pathlib import Path

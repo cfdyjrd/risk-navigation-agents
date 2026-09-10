@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from typing import Any, Callable, Optional
+from typing import Any, Callable, Dict, Optional
 from uuid import uuid4
 
 from robot_interface import (
@@ -16,7 +16,8 @@ from robot_interface import (
 from safety_guard import apply_safety_guard
 
 
-ExperienceSink = Callable[[dict[str, Any]], None]
+# Runtime type alias must also import on the G1 host's Python 3.8.
+ExperienceSink = Callable[[Dict[str, Any]], None]
 
 
 class SafeExecutionBridge:

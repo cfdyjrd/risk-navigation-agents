@@ -1,0 +1,16 @@
+{
+  "robot": {
+    "device_id": "G1",
+    "model": "g1",
+    "max_speed_mps": 0.1,
+    "slow_speed_mps": 0.05,
+    "max_yaw_rate_rps": 0.2,
+    "max_duration_s": 0.5,
+    "allowed_fsm_ids": [],
+    "max_tilt_rad": null
+  },
+  "width_m": null,
+  "state_file": "/tmp/risk-navigation-g1-state.json",
+  "perception_file": null,
+  "task": {"goal": "检查当前通道是否允许短时直行；本入口只预览决策"}
+}

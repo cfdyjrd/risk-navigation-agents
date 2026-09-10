@@ -24,7 +24,7 @@ import tempfile
 import time
 
 from robot_interface import RobotObservation
-from unitree_adapter import UnitreeConfig, load_go1_sdk, validate_unitree_observation
+from unitree_adapter import G1Config, UnitreeConfig, load_go1_sdk, validate_unitree_observation
 
 MAX_JSON_BYTES = 1024 * 1024
 
@@ -65,17 +65,18 @@ def validate_config(data, base_dir):
     unknown = set(data) - {"robot", "connection", "observation_file"}
     if unknown:
         raise ValueError(f"unknown config fields: {sorted(unknown)}")
-    config = UnitreeConfig(**data["robot"])
+    config_type = G1Config if data["robot"].get("model") == "g1" else UnitreeConfig
+    config = config_type(**data["robot"])
     connection = data["connection"]
     if not isinstance(connection, dict):
         raise ValueError("connection must be an object")
-    allowed = {"network_interface"} if config.model == "go2" else {"robot_ip", "sdk_extension", "local_port", "remote_port"}
+    allowed = {"network_interface"} if config.model in {"go2", "g1"} else {"robot_ip", "sdk_extension", "local_port", "remote_port"}
     if set(connection) - allowed:
         raise ValueError("connection fields do not match robot model")
-    if config.model == "go2":
+    if config.model in {"go2", "g1"}:
         interface = connection.get("network_interface")
         if not isinstance(interface, str) or not interface.strip():
-            raise ValueError("set connection.network_interface to the actual Go2 interface")
+            raise ValueError("set connection.network_interface to the actual robot interface")
     else:
         ipaddress.ip_address(connection.get("robot_ip", ""))
         extension = connection.get("sdk_extension")
@@ -103,12 +104,16 @@ def sdk_probe(model, extension):
                 raise ValueError(f"Go1 SDK missing {symbol}")
         return {"module": str(extension), "version": "legacy extension; verify release on host"}
     channel = importlib.import_module("unitree_sdk2py.core.channel")
-    sport = importlib.import_module("unitree_sdk2py.go2.sport.sport_client")
+    module_path, class_name = (("unitree_sdk2py.g1.loco.g1_loco_client", "LocoClient")
+                               if model == "g1" else ("unitree_sdk2py.go2.sport.sport_client", "SportClient"))
+    sport = importlib.import_module(module_path)
     ChannelFactoryInitialize = getattr(channel, "ChannelFactoryInitialize", None)
     ChannelSubscriber = getattr(channel, "ChannelSubscriber", None)
-    SportClient = getattr(sport, "SportClient", None)
+    SportClient = getattr(sport, class_name, None)
     if not all(callable(item) for item in (ChannelFactoryInitialize, ChannelSubscriber, SportClient)):
-        raise ValueError("Go2 SDK API mismatch")
+        raise ValueError(f"{model} SDK API mismatch")
+    if model == "g1" and not callable(getattr(SportClient, "SetVelocity", None)):
+        raise ValueError("G1 SDK missing SetVelocity")
     try:
         version = importlib.metadata.version("unitree_sdk2py")
     except importlib.metadata.PackageNotFoundError:
@@ -198,7 +203,7 @@ def run_preflight(config_path, *, duration=3.0, interval=0.1, skip_sdk=False):
         report["status"] = "fail"
         return report
 
-    if config.model == "go2":
+    if config.model in {"go2", "g1"}:
         try:
             interfaces = [name for _, name in socket.if_nameindex()]
             present = connection["network_interface"] in interfaces
@@ -225,7 +230,7 @@ def run_preflight(config_path, *, duration=3.0, interval=0.1, skip_sdk=False):
 
 
 def main(argv=None):
-    parser = argparse.ArgumentParser(description="Go1 / Go2-1 只读预检：配置、SDK 加载、JSON 观测更新；不发送控制指令。")
+    parser = argparse.ArgumentParser(description="Go1 / Go2 / G1 只读预检：配置、SDK 加载、JSON 观测更新；不发送控制指令。")
     parser.add_argument("--config", type=Path)
     parser.add_argument("--duration", type=float, default=3, help="观测检查秒数，0.1–60（默认 3）")
     parser.add_argument("--interval", type=float, default=.1, help="轮询间隔秒数（默认 0.1）")

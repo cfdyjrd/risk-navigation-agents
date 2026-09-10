@@ -46,6 +46,11 @@ Safety Decision Agent 的结果是模型建议，不直接进入机器人执行�
 
 ## 真机执行接口
 
+G1 人形机器人现已提供独立 `G1LocoDriver` 与 `G1Config`，复用执行桥接和
+任务循环；现场 SDK 核对、只读状态订阅、配置与未完成接线见
+[G1 接入说明](docs/g1_connection.md)。G1 不使用 Go1/Go2 的驱动，必要的
+FSM、姿态和同步观测缺失时拒绝运动；当前尚未进行真实运动验证。
+
 `robot_interface.py` 定义了与机器人平台无关的最小接口：读取同步观测、执行一个
 已批准语义动作，以及独立急停。`execution_bridge.py` 在每次下发前读取最新状态，
 将其转换为现有场景结构，再次运行 Safety Guard，并只执行其 `approved_action`。
@@ -300,3 +305,43 @@ docs/method_draft_zh.md           与当前代码对应的Method中文初稿
 - 当前实验规模较小，需要增加场景数量、重复次数和量化指标。
 - 任务收益、相对风险、相对不确定性的权重与阈值尚未通过仿真开发集校准，
   当前分数不能解释为真实事件概率。
+
+## 重新观测后继续决策
+
+`robot_task_loop.py` 提供 `RobotTaskLoop`，连接实时观测、记忆检索、三 Agent、
+优化器和 `SafeExecutionBridge`。`observe_again` 的停止请求不再被当成任务终点：
+循环等待动作返回之后的两帧新观测，确认实测停稳，再更新场景并重新决策。
+每次执行仍由桥接层重新读取状态并经过 Guard，不恢复旧的前进动作。
+
+```python
+from robot_task_loop import RobotTaskLoop, make_memory_decider
+
+# bridge 使用已配置的 RobotAdapter；store、rule_store、client 为现有实例。
+loop = RobotTaskLoop(
+    bridge,
+    make_memory_decider(store, rule_store, client, audit_sink=save_decision_audit),
+    is_stationary=measured_stationary,
+    goal_reached=verified_goal_reached,
+    max_reobservations=3,
+    max_steps=30,
+    observation_timeout_s=3.0,
+    task_timeout_s=120.0,
+)
+result = loop.run({"goal": "到达通道出口后的目标点"})
+```
+
+`measured_stationary(observation)` 必须根据里程计等真实运动反馈返回布尔值；
+`verified_goal_reached(observation, task)` 必须独立判定实际到达，不能使用命令
+提交成功作为依据。`save_decision_audit(record)` 保存每次角色证据、报告和优化结果。
+这些回调由现场传感器和记录系统提供，不存在可信反馈时循环不会默认认为停稳。
+进入循环前应停好机器人。观测时间戳采用带时区的实际采集时间，传感器与主机需同步。
+
+默认最多连续发出 3 次重新观测请求；超过限制、旧帧无法刷新、停稳确认超时、
+决策异常、运动中止或记录失败都会急停并返回 `fail_closed`。`ask_human` 返回
+`needs_human`，不自动编造回答；Guard/决策要求停止返回 `stopped`；仅独立到达
+判据成立才返回 `completed`。新帧仅说明数据更新，不代表遮挡已经消除。
+该循环不额外生成探查位移，也不提供完整路线规划或人机问答模块。
+
+同步感知、模型和 SDK 回调必须各自设置 I/O 超时。循环会在轮询及决策返回后检查
+时间预算，但不能强行打断一个永久阻塞的外部调用；硬件急停与看门狗仍由平台负责。
+离线验证：`python3 -m unittest test_robot_task_loop test_execution_bridge test_unitree_adapter`。

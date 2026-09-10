@@ -1,4 +1,5 @@
 .env
+.venv-go2/
 __pycache__/
 *.pyc
 .cache/

@@ -1,4 +1,4 @@
-"""Bounded semantic motion for Go1 and Go2; importing never connects hardware.
+"""Bounded semantic motion for Go1, Go2 and G1; import never connects hardware.
 
 Observation providers must return a non-blocking snapshot from a sensor cache.
 SDK transports acknowledge submission only, not physical arrival or stopping.
@@ -45,7 +45,7 @@ def load_go1_sdk(sdk_extension: str):
 @dataclass(frozen=True)
 class UnitreeConfig:
     device_id: str
-    model: str  # go1 or go2, distinct from device_id such as Go2-1
+    model: str  # go1, go2 or g1; G1 requires G1Config
     max_speed_mps: float = 0.3
     slow_speed_mps: float = 0.1
     max_yaw_rate_rps: float = 0.5
@@ -55,12 +55,58 @@ class UnitreeConfig:
     def __post_init__(self):
         if not isinstance(self.device_id, str) or not self.device_id.strip():
             raise RobotInterfaceError("device_id is required")
-        if self.model not in {"go1", "go2"}:
-            raise RobotInterfaceError("model must be go1 or go2; G1 is a different platform")
+        if self.model not in {"go1", "go2", "g1"}:
+            raise RobotInterfaceError("model must be go1, go2 or g1")
+        if self.model == "g1" and not isinstance(self, G1Config):
+            raise RobotInterfaceError("G1 requires G1Config with explicit readiness limits")
         for name in ("max_speed_mps", "slow_speed_mps", "max_yaw_rate_rps", "max_duration_s", "max_observation_age_s"):
             _positive(getattr(self, name), name, math.inf)
         if self.slow_speed_mps > self.max_speed_mps:
             raise RobotInterfaceError("slow_speed_mps exceeds max_speed_mps")
+
+
+@dataclass(frozen=True)
+class G1Config(UnitreeConfig):
+    """Provisional bounded speeds; FSM and tilt limits must be supplied onsite."""
+    model: str = "g1"
+    max_speed_mps: float = 0.1
+    slow_speed_mps: float = 0.05
+    max_yaw_rate_rps: float = 0.2
+    max_duration_s: float = 0.5
+    allowed_fsm_ids: tuple[int, ...] = ()
+    max_tilt_rad: float | None = None
+
+    def __post_init__(self):
+        super().__post_init__()
+        if self.model != "g1":
+            raise RobotInterfaceError("G1Config requires model=g1")
+        ids = self.allowed_fsm_ids
+        if not isinstance(ids, (list, tuple)) or not ids or any(type(i) is not int or i < 0 for i in ids):
+            raise RobotInterfaceError("set allowed_fsm_ids from verified G1 control configuration")
+        object.__setattr__(self, "allowed_fsm_ids", tuple(ids))
+        _positive(self.max_tilt_rad, "max_tilt_rad", math.pi / 2)
+
+
+def _validate_g1_state(observation, config):
+    # These must be independently sampled state, not values copied from config.
+    state = observation.metadata.get("g1_state")
+    if not isinstance(state, dict):
+        raise RobotInterfaceError("G1 requires measured metadata.g1_state")
+    for key in ("lowstate_timestamp", "fsm_timestamp", "attitude_timestamp"):
+        try:
+            stamp = datetime.fromisoformat(state[key].replace("Z", "+00:00"))
+            age = (datetime.now(timezone.utc) - stamp).total_seconds()
+            if stamp.tzinfo is None or not 0 <= age <= config.max_observation_age_s:
+                raise ValueError("stale/future state")
+        except (KeyError, AttributeError, TypeError, ValueError) as exc:
+            raise RobotInterfaceError(f"G1 {key} must be a fresh source timestamp") from exc
+    fsm_id = state.get("fsm_id")
+    if type(fsm_id) is not int or fsm_id not in config.allowed_fsm_ids:
+        raise RobotInterfaceError("G1 FSM is not an explicitly allowed locomotion state")
+    for key in ("roll_rad", "pitch_rad"):
+        value = state.get(key)
+        if type(value) not in (int, float) or not math.isfinite(value) or abs(value) > config.max_tilt_rad:
+            raise RobotInterfaceError(f"G1 {key} exceeds measured attitude limit or is invalid")
 
 
 def validate_unitree_observation(observation: RobotObservation, config: UnitreeConfig) -> RobotObservation:
@@ -79,6 +125,8 @@ def validate_unitree_observation(observation: RobotObservation, config: UnitreeC
         raise RobotInterfaceError("observation timestamp must be timezone-aware ISO 8601") from exc
     if not 0 <= age <= config.max_observation_age_s:
         raise RobotInterfaceError(f"observation is stale or from the future: age={age:.3f}s")
+    if config.model == "g1":
+        _validate_g1_state(observation, config)
     return observation
 
 
@@ -125,6 +173,57 @@ class Go2SportDriver:
 
     def stop(self):
         self._check(self.client.StopMove(), "StopMove")
+
+
+class G1LocoDriver:
+    """G1 LocoClient only. Never changes FSM, posture or control ownership.
+
+    Move/StopMove discard the RPC code in the installed G1 SDK; call
+    SetVelocity directly. The finite lease limits a stale velocity request,
+    but is not a verified hardware watchdog or a guarantee of physical stop.
+    """
+    model = "g1"
+    period_s = 0.05
+
+    def __init__(self, loco_client, *, command_lease_s: float = 0.2):
+        self.command_lease_s = _positive(command_lease_s, "command_lease_s", 0.5)
+        if self.command_lease_s < self.period_s:
+            raise RobotInterfaceError("command lease must cover at least one send period")
+        if not callable(getattr(loco_client, "SetVelocity", None)):
+            raise RobotInterfaceError("G1 SDK requires SetVelocity")
+        self.client = loco_client
+
+    @classmethod
+    def connect(cls, network_interface: str, timeout_s: float = 1.0, *, command_lease_s: float = 0.2):
+        if not isinstance(network_interface, str) or not network_interface.strip():
+            raise RobotInterfaceError("explicit G1 network_interface is required")
+        _positive(timeout_s, "timeout_s", 10)
+        _positive(command_lease_s, "command_lease_s", 0.5)
+        if command_lease_s < cls.period_s:
+            raise RobotInterfaceError("command lease must cover at least one send period")
+        channel = importlib.import_module("unitree_sdk2py.core.channel")
+        loco = importlib.import_module("unitree_sdk2py.g1.loco.g1_loco_client")
+        factory = getattr(channel, "ChannelFactoryInitialize", None)
+        client_class = getattr(loco, "LocoClient", None)
+        if not callable(factory) or not callable(client_class) or not callable(getattr(client_class, "SetVelocity", None)):
+            raise RobotInterfaceError("G1 SDK API mismatch")
+        factory(0, network_interface)
+        client = client_class()
+        client.SetTimeout(timeout_s)
+        client.Init()
+        return cls(client, command_lease_s=command_lease_s)
+
+    def move(self, vx, vy, yaw_rate):
+        self._send(vx, vy, yaw_rate)
+
+    def stop(self):
+        # Do not use Damp/ZeroTorque: that is not a walking stop for a humanoid.
+        self._send(0.0, 0.0, 0.0)
+
+    def _send(self, vx, vy, yaw_rate):
+        code = self.client.SetVelocity(vx, vy, yaw_rate, self.command_lease_s)
+        if type(code) is not int or code != 0:
+            raise RobotInterfaceError(f"G1 SetVelocity failed: code={code!r}")
 
 
 class Go1UDPDriver:
