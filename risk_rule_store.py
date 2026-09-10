@@ -25,6 +25,14 @@ REQUIRED_RULE_FIELDS = {
     "status",
 }
 
+SUPPORTED_TRIGGER_FIELDS = {
+    "maximum_clearance_m",
+    "maximum_observation_confidence",
+    "minimum_observation_confidence",
+    "maximum_minimum_envelope_clearance_m",
+    "minimum_minimum_envelope_clearance_m",
+}
+
 
 class RiskRuleStore:
     """Persistent store for reusable rules distilled from L1 memory cards."""
@@ -75,6 +83,7 @@ class RiskRuleStore:
                 "prohibited_actions": rule["prohibited_actions"],
                 "mitigations": rule.get("mitigations", []),
                 "source_memory_ids": rule["source_memory_ids"],
+                "source": rule.get("source"),
                 "confidence": rule["confidence"],
                 "match_reasons": reasons,
             })
@@ -100,6 +109,28 @@ class RiskRuleStore:
             raise RiskRuleError(f"第 {index} 条 memory_level 必须为 L2_risk_rule")
         if not isinstance(rule["trigger_conditions"], dict):
             raise RiskRuleError(f"第 {index} 条 trigger_conditions 必须是对象")
+        conditions = rule["trigger_conditions"]
+        unknown = set(conditions) - SUPPORTED_TRIGGER_FIELDS
+        if unknown:
+            raise RiskRuleError(f"第 {index} 条触发条件不受支持: {sorted(unknown)}")
+        if not conditions:
+            raise RiskRuleError(f"第 {index} 条 trigger_conditions 不能为空")
+        for name, value in conditions.items():
+            if isinstance(value, bool) or not isinstance(value, (int, float)):
+                raise RiskRuleError(f"第 {index} 条 {name} 必须是数值")
+            if name.endswith("observation_confidence") and not 0 <= value <= 1:
+                raise RiskRuleError(f"第 {index} 条 {name} 必须在 0 到 1 之间")
+        source = rule.get("source")
+        if source is not None:
+            if not isinstance(source, dict):
+                raise RiskRuleError(f"第 {index} 条 source 必须是对象")
+            if (
+                source.get("kind") == "human_constructed"
+                and source.get("historical_physical_run") is not False
+            ):
+                raise RiskRuleError(
+                    f"第 {index} 条人工构造规则必须明确标注 historical_physical_run=false"
+                )
         if not isinstance(rule["rule"], str) or not rule["rule"].strip():
             raise RiskRuleError(f"第 {index} 条 rule 不能为空")
 
@@ -161,6 +192,31 @@ def _match_trigger_conditions(
             return None
         reasons.append(
             f"观测置信度 {confidence:.2f} 不低于 {minimum_confidence:.2f}"
+        )
+
+    envelope_clearance = environment.get("minimum_envelope_clearance_m")
+    maximum_envelope = conditions.get("maximum_minimum_envelope_clearance_m")
+    if maximum_envelope is not None:
+        if (
+            not isinstance(envelope_clearance, (int, float))
+            or isinstance(envelope_clearance, bool)
+            or envelope_clearance > maximum_envelope
+        ):
+            return None
+        reasons.append(
+            f"最小包络间距 {envelope_clearance:.3f}m 不超过 {maximum_envelope:.3f}m"
+        )
+
+    minimum_envelope = conditions.get("minimum_minimum_envelope_clearance_m")
+    if minimum_envelope is not None:
+        if (
+            not isinstance(envelope_clearance, (int, float))
+            or isinstance(envelope_clearance, bool)
+            or envelope_clearance < minimum_envelope
+        ):
+            return None
+        reasons.append(
+            f"最小包络间距 {envelope_clearance:.3f}m 不低于 {minimum_envelope:.3f}m"
         )
 
     return reasons

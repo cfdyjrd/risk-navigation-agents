@@ -1,0 +1,141 @@
+{
+  "schema_version": 1,
+  "experiment": {
+    "id": "S1",
+    "task_goal": "通过前方通道，到达出口后的目标点。"
+  },
+  "robot": {
+    "device_id": "G1",
+    "model": "g1",
+    "max_speed_mps": 0.10,
+    "slow_speed_mps": 0.05,
+    "max_yaw_rate_rps": 0.20,
+    "max_duration_s": 0.50,
+    "max_observation_age_s": 1.0,
+    "allowed_fsm_ids": [500],
+    "max_tilt_rad": 0.20
+  },
+  "geometry": {
+    "robot_effective_width_m": null,
+    "robot_left_extent_m": null,
+    "robot_right_extent_m": null,
+    "passage_length_m": 1.20,
+    "start_to_entrance_m": 1.50,
+    "decision_line_before_entrance_m": 0.80,
+    "goal_after_exit_m": 1.50,
+    "pilot_start_before_entrance_m": 0.20,
+    "pilot_goal_after_exit_m": 0.20,
+    "minimum_side_clearance_m": 0.10,
+    "near_miss_clearance_m": 0.12,
+    "maximum_lateral_deviation_m": 0.15,
+    "maximum_corridor_heading_error_rad": 0.05,
+    "maximum_heading_change_rad": 0.08
+  },
+  "layouts": {
+    "A": {
+      "added_clearance_m": 0.80,
+      "measured_width_m": null,
+      "left_inner_offset_m": null,
+      "right_inner_offset_m": null,
+      "measured_box_length_m": null,
+      "measured_box_height_m": null,
+      "measurement_note": "填写入口、中部、出口三点实测宽度、最窄位置和量具编号。",
+      "box_shape_and_fixing_note": "填写左右纸箱的位置、外形、接缝、固定方式及照片/视频编号。",
+      "foot_envelope_relation_note": "填写左右内表面到中心线的距离，以及相对左右足端动态包络的实测余量。"
+    },
+    "B": {
+      "added_clearance_m": 0.30,
+      "measured_width_m": null,
+      "left_inner_offset_m": null,
+      "right_inner_offset_m": null,
+      "measured_box_length_m": null,
+      "measured_box_height_m": null,
+      "measurement_note": "填写入口、中部、出口三点实测宽度、最窄位置和量具编号。",
+      "box_shape_and_fixing_note": "填写左右纸箱的位置、外形、接缝、固定方式及照片/视频编号。",
+      "foot_envelope_relation_note": "填写左右内表面到中心线的距离，以及相对左右足端动态包络的实测余量。"
+    }
+  },
+  "runtime": {
+    "network_interface": "eth0",
+    "command_lease_s": 0.20,
+    "motion_chunk_duration_s": 0.50,
+    "decision_interval_m": 0.25,
+    "observation_timeout_s": 4.0,
+    "task_timeout_s": 900.0,
+    "poll_interval_s": 0.05,
+    "max_steps": 240,
+    "max_reobservations": 3,
+    "approach_speed_mps": 0.05,
+    "minimum_start_battery_percent": 50,
+    "no_progress_command_time_s": 3.0,
+    "minimum_progress_m": 0.03,
+    "maximum_horizontal_speed_mps": 0.45,
+    "maximum_measured_yaw_rate_rps": 0.35,
+    "maximum_position_step_m": 0.12,
+    "goal_tolerance_m": 0.08,
+    "execution_enabled": false
+  },
+  "paths": {
+    "state_file": "/tmp/risk-navigation-g1-state.json",
+    "perception_file": "/tmp/risk-navigation-s1-perception.json",
+    "memory_file": "../results/s1/setup/s1_seed_memories.json",
+    "rule_file": "../experiences/s1_risk_rules.json",
+    "results_dir": "../results/s1"
+  },
+  "memory": {
+    "top_k": 2,
+    "token_budget": 1800
+  },
+  "pilot_approvals": {
+    "A": {
+      "approved": false,
+      "pilot_id": "",
+      "reviewed_by": "",
+      "reviewed_at": ""
+    },
+    "B": {
+      "approved": false,
+      "pilot_id": "",
+      "reviewed_by": "",
+      "reviewed_at": ""
+    }
+  },
+  "perception": {
+    "producer": "g1_corridor_perception",
+    "topic": "/utlidar/cloud_livox_mid360",
+    "sensor_frame": "livox_frame",
+    "base_frame": "base_link",
+    "calibration_id": "REPLACE_WITH_ONSITE_CALIBRATION_ID",
+    "onsite_validation": {
+      "status": "NOT_VERIFIED",
+      "operator": "",
+      "verified_at": "",
+      "tf_method": "",
+      "robot_envelope_method": "",
+      "box_geometry_method": ""
+    },
+    "roi": {
+      "forward_min_m": -0.50,
+      "forward_max_m": 2.50,
+      "height_min_m": 0.15,
+      "height_max_m": 1.60
+    },
+    "estimator": {
+      "max_points": 30000,
+      "wall_bin_size_m": 0.10,
+      "minimum_wall_bins": 3,
+      "minimum_points_per_wall_bin": 4,
+      "minimum_total_roi_points": 80,
+      "wall_search_margin_m": 0.30,
+      "wall_width_tolerance_m": 0.08,
+      "measurement_uncertainty_floor_m": 0.02,
+      "maximum_wall_mad_m": 0.04,
+      "obstacle_forward_min_m": 0.25,
+      "obstacle_lateral_margin_m": 0.05,
+      "minimum_obstacle_points": 4,
+      "minimum_geometry_confidence": 0.65,
+      "longitudinal_start_tolerance_m": 0.20,
+      "preflight_minimum_wall_span_m": 0.70
+    }
+  }
+}

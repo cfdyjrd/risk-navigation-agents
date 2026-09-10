@@ -1,11 +1,13 @@
 """Offline tests for risk-experience validation and retrieval."""
 
 import json
+from copy import deepcopy
 import unittest
 from pathlib import Path
 
 from experience_store import (
     MEMORY_SCHEMA_VERSION,
+    ExperienceError,
     ExperienceStore,
     build_memory_card,
     estimate_tokens,
@@ -118,6 +120,15 @@ class ExperienceStoreTests(unittest.TestCase):
     def test_invalid_role_is_rejected(self) -> None:
         with self.assertRaises(ValueError):
             self.store.retrieve(self.scenario, role="observer")  # type: ignore[arg-type]
+
+    def test_constructed_example_cannot_claim_physical_history(self) -> None:
+        item = deepcopy(self.store.load()[0])
+        item["source"] = {
+            "kind": "human_constructed",
+            "historical_physical_run": True,
+        }
+        with self.assertRaises(ExperienceError):
+            ExperienceStore._validate(item, 0)
 
 
 if __name__ == "__main__":

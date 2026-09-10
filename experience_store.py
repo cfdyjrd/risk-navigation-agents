@@ -169,6 +169,17 @@ class ExperienceStore:
         severity = item["risk"].get("severity")
         if not isinstance(severity, int) or not 1 <= severity <= 5:
             raise ExperienceError(f"第 {index} 条 risk.severity 必须为 1 到 5")
+        source = item.get("source")
+        if source is not None:
+            if not isinstance(source, dict):
+                raise ExperienceError(f"第 {index} 条 source 必须是对象")
+            if (
+                source.get("kind") == "human_constructed"
+                and source.get("historical_physical_run") is not False
+            ):
+                raise ExperienceError(
+                    f"第 {index} 条人工构造经验必须明确标注 historical_physical_run=false"
+                )
 
     @staticmethod
     def _score(
@@ -357,6 +368,9 @@ def _redundancy(a: RetrievedExperience, b: RetrievedExperience) -> float:
 def _clearance(
     robot: dict[str, Any], environment: dict[str, Any]
 ) -> float | None:
+    envelope_clearance = environment.get("minimum_envelope_clearance_m")
+    if _number(envelope_clearance):
+        return float(envelope_clearance)
     robot_width = robot.get("width_m")
     corridor_width = environment.get("corridor_width_m")
     if _number(robot_width) and _number(corridor_width):
@@ -413,10 +427,17 @@ def build_memory_card(item: RetrievedExperience) -> dict[str, Any]:
         ),
         "context": {
             "robot_type": robot.get("type"),
+            "platform": robot.get("platform", robot.get("type")),
             "task_goal": experience.get("task_goal"),
         },
         "trigger_conditions": {
             "clearance_m": round(clearance, 3) if clearance is not None else None,
+            "corridor_width_m": environment.get("corridor_width_m"),
+            "left_envelope_clearance_m": environment.get("left_envelope_clearance_m"),
+            "right_envelope_clearance_m": environment.get("right_envelope_clearance_m"),
+            "minimum_envelope_clearance_m": environment.get("minimum_envelope_clearance_m"),
+            "clearance_uncertainty_m": environment.get("clearance_uncertainty_m"),
+            "corridor_heading_error_rad": environment.get("corridor_heading_error_rad"),
             "obstacle_detected": environment.get("obstacle_detected"),
             "obstacle_distance_m": environment.get("obstacle_distance_m"),
             "observation_confidence": environment.get("observation_confidence"),
