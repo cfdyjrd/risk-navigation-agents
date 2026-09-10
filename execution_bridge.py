@@ -142,6 +142,7 @@ class SafeExecutionBridge:
             },
             "source": {
                 "type": "real_robot",
+                "kind": "physical_run_candidate_review_required",
                 "observation_timestamp": scenario["observation"]["timestamp"],
                 "frame_id": scenario["observation"]["frame_id"],
             },

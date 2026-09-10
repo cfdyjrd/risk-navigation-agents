@@ -4,6 +4,9 @@
 运行 Task Advocate、Risk Critic 和 Safety Decision Agent。模型报告进入确定性
 约束优化器，最终动作再由 Safety Guard 复核。
 
+G1 的 S1 窄通道真机实验入口、标定、B0/M/B1 条件、低速预实验和完整现场步骤见
+[`docs/S1_narrow_corridor_operation.md`](docs/S1_narrow_corridor_operation.md)。
+
 项目当前重点实现两项机制：
 
 1. 分层风险记忆：从历史经历生成 L1 Risk Memory Card，再归纳为可复用的
@@ -28,7 +31,7 @@ Safety Decision Agent
     ↓
 Safety Guard
     ↓
-机器人执行层（尚未接入）
+机器人执行层（平台适配器与审计桥）
 ```
 
 L2规则目前作为可追溯证据进入三个Agent。若多条L2规则给出互不兼容的建议，
@@ -47,14 +50,20 @@ Safety Decision Agent 的结果是模型建议，不直接进入机器人执行�
 ## 真机执行接口
 
 G1 人形机器人现已提供独立 `G1LocoDriver` 与 `G1Config`，复用执行桥接和
-任务循环；现场 SDK 核对、只读状态订阅、配置与未完成接线见
+任务循环；已完成受限直行运动链路验证。S1 的通道点云标定、动态包络测量和 A/B
+低速预实验仍必须在每套现场布置中单独完成；现场 SDK 核对、只读状态订阅和配置见
 [G1 接入说明](docs/g1_connection.md)。G1 不使用 Go1/Go2 的驱动，必要的
-FSM、姿态和同步观测缺失时拒绝运动；当前尚未进行真实运动验证。
+FSM、姿态和同步观测缺失时拒绝运动。
 
 `robot_interface.py` 定义了与机器人平台无关的最小接口：读取同步观测、执行一个
 已批准语义动作，以及独立急停。`execution_bridge.py` 在每次下发前读取最新状态，
 将其转换为现有场景结构，再次运行 Safety Guard，并只执行其 `approved_action`。
 输入格式错误、非优化器来源、无效 Guard 输出或平台异常都会触发失效关闭。
+
+G1 现场 DDS 发布时钟与开发电脑存在约 24.85 秒稳定偏差。状态采集器不会调整
+机器人或发布端时钟，也不会直接给时间戳加固定偏移；它按每个遥测流分别验证源时间
+持续递增、单调时钟速率、接收间隔与钟差稳定性，验证通过后才用本机接收时间判断
+新鲜度，并保留原始 DDS 时间供审计。该检查通过仍不等于允许运动。
 
 后续接入 ROS 2 时，只需实现 `RobotAdapter`，把订阅到的里程计、激光雷达、
 电量和任务状态组成 `RobotObservation`，再把七种语义动作映射为导航目标、速度

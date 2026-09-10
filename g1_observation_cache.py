@@ -3,24 +3,19 @@
 No SDK imports or commands. Incomplete raw collector reports cannot be used as
 RobotObservation. Source timestamps are preserved, never refreshed on read.
 """
-from datetime import datetime, timezone
+from datetime import datetime
 import math
 
+from g1_state_collector import record_freshness
 from robot_interface import RobotInterfaceError, RobotObservation
 from unitree_adapter import G1Config, validate_unitree_observation
 
 
 def _fresh(record, max_age):
-    try:
-        stamp = datetime.fromisoformat(record["timestamp"].replace("Z", "+00:00"))
-        if stamp.tzinfo is None:
-            raise ValueError("timezone missing")
-        age = (datetime.now(timezone.utc) - stamp).total_seconds()
-        if not 0 <= age <= max_age:
-            raise ValueError("stale or future data")
-        return stamp
-    except (KeyError, TypeError, ValueError, AttributeError) as exc:
-        raise RobotInterfaceError("missing/invalid source timestamp: %s" % exc) from exc
+    status = record_freshness(record, max_age_s=max_age)
+    if not status["fresh"]:
+        raise RobotInterfaceError("missing/stale timestamp or unverified DDS clock liveness")
+    return datetime.fromisoformat(status["effective_timestamp"])
 
 
 def _vector(value, length):
@@ -47,6 +42,7 @@ def build_observation(report, perception, config, *, width_m):
         stamps = [_fresh(record, config.max_observation_age_s) for record in records]
         stamps.append(_fresh(perception, config.max_observation_age_s))
         low, odom, battery, fsm = records
+        low_effective, odom_effective, _battery_effective, fsm_effective = stamps[:4]
         if type(odom.get("error_code")) is not int or odom["error_code"] != 0:
             raise RobotInterfaceError("odometry error_code is missing or nonzero")
         rpy = _vector(low["rpy_rad"], 3)
@@ -57,20 +53,42 @@ def build_observation(report, perception, config, *, width_m):
             raise RobotInterfaceError("perception must be validated in base_link")
         environment = {key: perception[key] for key in (
             "obstacle_detected", "obstacle_distance_m", "observation_confidence")}
-        if "corridor_width_m" in perception:
-            environment["corridor_width_m"] = perception["corridor_width_m"]
+        for key in (
+                "corridor_width_m", "corridor_geometry_valid",
+                "left_envelope_clearance_m", "right_envelope_clearance_m",
+                "minimum_envelope_clearance_m", "clearance_uncertainty_m",
+                "corridor_center_offset_m", "corridor_geometry_confidence",
+                "corridor_wall_start_m", "corridor_wall_end_m",
+                "corridor_heading_error_rad", "critical_wall_bin_x_m"):
+            if key in perception:
+                environment[key] = perception[key]
+        if "clearance_basis" in perception:
+            environment["clearance_basis"] = perception["clearance_basis"]
         observation = RobotObservation(
             {"device_id": config.device_id, "type": "g1", "width_m": width_m,
              "battery_percent": battery["soc"]}, environment,
             min(stamps).isoformat(), metadata={
-                "g1_state": {"lowstate_timestamp": low["timestamp"],
-                             "attitude_timestamp": low["timestamp"],
-                             "fsm_timestamp": fsm["timestamp"], "fsm_id": fsm["fsm_id"],
-                             "roll_rad": rpy[0], "pitch_rad": rpy[1]},
-                "odometry": {"timestamp": odom["timestamp"], "position_m": position,
+                "g1_state": {"lowstate_timestamp": low_effective.isoformat(),
+                             "attitude_timestamp": low_effective.isoformat(),
+                             "fsm_timestamp": fsm_effective.isoformat(), "fsm_id": fsm["fsm_id"],
+                             "lowstate_source_timestamp": low["timestamp"],
+                             "timestamp_basis": record_freshness(
+                                 low, max_age_s=config.max_observation_age_s)["basis"],
+                             "roll_rad": rpy[0], "pitch_rad": rpy[1],
+                             "yaw_rad": rpy[2]},
+                "odometry": {"timestamp": odom_effective.isoformat(),
+                             "source_timestamp": odom["timestamp"], "position_m": position,
                              "velocity_mps": velocity, "yaw_rate_rps": yaw_rate},
                 "sources": {key: report["state"][key].get("source")
-                            for key in ("lowstate", "odometry", "battery", "fsm")}})
+                            for key in ("lowstate", "odometry", "battery", "fsm")},
+                "perception": {key: perception.get(key) for key in (
+                    "producer", "schema_version", "calibration_id", "layout",
+                    "source_frame", "frame_id", "source_stamp", "received_at",
+                    "timestamp_basis", "source_liveness", "roi_point_count",
+                    "wall_support", "wall_estimate", "corridor_geometry_valid")},
+                "clock_evidence": {key: record_freshness(
+                    report["state"][key], max_age_s=config.max_observation_age_s)
+                    for key in ("lowstate", "odometry", "battery", "fsm")}})
     except (KeyError, TypeError) as exc:
         raise RobotInterfaceError("incomplete G1 observation inputs: %s" % exc) from exc
     return validate_unitree_observation(observation, config)

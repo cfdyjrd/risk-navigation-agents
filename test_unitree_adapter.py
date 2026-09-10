@@ -114,6 +114,31 @@ class AdapterTests(unittest.TestCase):
         self.assertEqual(len([c for c in self.driver.calls if c[0] == "move"]), 1)
         self.assertEqual(self.driver.calls[-1], ("stop",))
 
+    def test_required_side_geometry_loss_during_motion_stops(self):
+        def snapshot():
+            if self.driver.calls:
+                return observation(
+                    envelope_clearance_required=True,
+                    corridor_geometry_valid=False,
+                )
+            return observation(
+                corridor_width_m=.70,
+                corridor_geometry_valid=True,
+                envelope_clearance_required=True,
+                maximum_corridor_heading_error_rad=.05,
+                left_envelope_clearance_m=.15,
+                right_envelope_clearance_m=.15,
+                clearance_uncertainty_m=.02,
+                minimum_envelope_clearance_m=.13,
+                corridor_heading_error_rad=0.,
+            )
+        self.adapter.observation_provider = snapshot
+        result = self.move()
+        self.assertEqual(result.status, "failure")
+        self.assertIn("corridor_geometry_unavailable", result.telemetry["failure_reason"])
+        self.assertEqual(len([call for call in self.driver.calls if call[0] == "move"]), 1)
+        self.assertEqual(self.driver.calls[-1], ("stop",))
+
     def test_failed_sdk_call_stops_and_latches(self):
         self.driver.fail_move = True
         result = self.move()

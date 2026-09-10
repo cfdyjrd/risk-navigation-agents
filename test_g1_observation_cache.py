@@ -4,7 +4,8 @@ import struct
 import unittest
 
 from g1_observation_cache import build_observation, measured_stationary
-from g1_state_collector import parse_fsm, dds_timestamp, state_freshness
+from g1_state_collector import (StreamLiveness, dds_timestamp, parse_fsm,
+                                record_freshness, state_freshness)
 from g1_lidar_probe import summarize_cloud
 from robot_interface import RobotInterfaceError
 from unitree_adapter import G1Config
@@ -26,6 +27,23 @@ class CacheTests(unittest.TestCase):
 
     def build(self):
         return build_observation(self.state, self.perception, self.config, width_m=.6)
+
+    @staticmethod
+    def skewed_live_record(payload):
+        tracker = StreamLiveness()
+        receipt_end_ns = int(datetime.now(timezone.utc).timestamp() * 1e9)
+        source_end_ns = receipt_end_ns - 25_000_000_000
+        monotonic_end_ns = 10_000_000_000
+        evidence = None
+        for index in range(9):
+            delta = (8 - index) * 50_000_000
+            evidence = tracker.observe(source_end_ns - delta, receipt_end_ns - delta,
+                                       monotonic_end_ns - delta)
+        return dict(payload,
+                    timestamp=datetime.fromtimestamp(source_end_ns / 1e9, timezone.utc).isoformat(),
+                    timestamp_basis="dds_writer_source_timestamp",
+                    received_at=datetime.fromtimestamp(receipt_end_ns / 1e9, timezone.utc).isoformat(),
+                    liveness=evidence)
 
     def test_oldest_source_preserved_and_motion_measured(self):
         observation = self.build()
@@ -55,6 +73,49 @@ class CacheTests(unittest.TestCase):
         self.assertFalse(result["battery"]["fresh"])
         self.assertTrue(result["fsm"]["fresh"])
         self.assertEqual(self.state["state"]["battery"]["timestamp"], "2000-01-01T00:00:00+00:00")
+
+    def test_advancing_clock_evidence_accepts_fresh_receipt_and_preserves_source(self):
+        record = self.skewed_live_record({"soc": 70})
+        source = record["timestamp"]
+        status = record_freshness(record)
+        self.assertTrue(status["fresh"])
+        self.assertTrue(status["liveness_verified"])
+        self.assertEqual(status["basis"], "verified_local_receipt_with_preserved_dds_source")
+        self.assertGreater(status["source_age_s"], 24.)
+        self.assertEqual(record["timestamp"], source)
+
+    def test_frozen_or_wrong_rate_clock_never_verifies_liveness(self):
+        for frozen in (True, False):
+            tracker = StreamLiveness()
+            evidence = None
+            for index in range(9):
+                source_step = 0 if frozen else 10_000_000
+                evidence = tracker.observe(1_000_000_000 + index * source_step,
+                                           26_000_000_000 + index * 50_000_000,
+                                           10_000_000_000 + index * 50_000_000)
+            self.assertFalse(evidence["verified"])
+
+    def test_observation_uses_verified_receipts_but_keeps_dds_times_for_audit(self):
+        for key in ("lowstate", "odometry", "battery"):
+            self.state["state"][key] = self.skewed_live_record(self.state["state"][key])
+        observation = self.build()
+        source = self.state["state"]["lowstate"]["timestamp"]
+        self.assertEqual(observation.metadata["g1_state"]["lowstate_source_timestamp"], source)
+        self.assertNotEqual(observation.metadata["g1_state"]["lowstate_timestamp"], source)
+        self.assertEqual(observation.metadata["clock_evidence"]["lowstate"]["basis"],
+                         "verified_local_receipt_with_preserved_dds_source")
+
+    def test_unverified_receipt_cannot_bypass_stale_dds_source(self):
+        self.state["state"]["lowstate"] = self.skewed_live_record(
+            self.state["state"]["lowstate"])
+        self.state["state"]["lowstate"]["liveness"]["verified"] = False
+        with self.assertRaises(RobotInterfaceError):
+            self.build()
+
+    def test_dds_record_requires_liveness_even_when_writer_clock_is_aligned(self):
+        record = {"timestamp": self.now, "timestamp_basis": "dds_writer_source_timestamp",
+                  "received_at": self.now}
+        self.assertFalse(record_freshness(record)["fresh"])
 
     def test_acquisition_error_or_odometry_error_rejects_observation(self):
         self.state["errors"] = {"fsm": "timeout"}

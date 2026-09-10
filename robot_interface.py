@@ -80,6 +80,39 @@ class RobotObservation:
             width = self.environment["corridor_width_m"]
             if type(width) not in (int, float) or not math.isfinite(width) or width < 0:
                 raise RobotInterfaceError("corridor_width_m must be finite and non-negative")
+        if "corridor_geometry_valid" in self.environment and type(
+            self.environment["corridor_geometry_valid"]
+        ) is not bool:
+            raise RobotInterfaceError("corridor_geometry_valid must be a boolean")
+        if "envelope_clearance_required" in self.environment and type(
+            self.environment["envelope_clearance_required"]
+        ) is not bool:
+            raise RobotInterfaceError("envelope_clearance_required must be a boolean")
+        for key in (
+            "left_envelope_clearance_m",
+            "right_envelope_clearance_m",
+            "minimum_envelope_clearance_m",
+            "clearance_uncertainty_m",
+            "corridor_center_offset_m",
+            "corridor_geometry_confidence",
+            "corridor_wall_start_m",
+            "corridor_wall_end_m",
+            "corridor_heading_error_rad",
+            "maximum_corridor_heading_error_rad",
+            "critical_wall_bin_x_m",
+        ):
+            if key not in self.environment:
+                continue
+            value = self.environment[key]
+            if type(value) not in (int, float) or not math.isfinite(value):
+                raise RobotInterfaceError(f"{key} must be finite")
+            if key in {
+                "clearance_uncertainty_m", "corridor_geometry_confidence",
+                "maximum_corridor_heading_error_rad",
+            } and value < 0:
+                raise RobotInterfaceError(f"{key} must be non-negative")
+            if key == "corridor_geometry_confidence" and value > 1:
+                raise RobotInterfaceError("corridor_geometry_confidence must be within [0, 1]")
 
 
 @dataclass(frozen=True)

@@ -95,6 +95,39 @@ class RiskRuleStoreTests(unittest.TestCase):
             with self.assertRaises(RiskRuleError):
                 RiskRuleStore(path).load()
 
+    def test_matches_side_specific_s1_clearance_rule(self) -> None:
+        store = RiskRuleStore(ROOT / "experiences" / "s1_risk_rules.json")
+        scenario = json.loads(json.dumps(self.scenario))
+        scenario["environment"]["minimum_envelope_clearance_m"] = 0.08
+        matches = store.retrieve_matching(scenario)
+        self.assertEqual([item["rule_id"] for item in matches], [
+            "s1_rule_insufficient_envelope_clearance_v1"
+        ])
+        self.assertEqual(matches[0]["source"]["kind"], "human_constructed")
+
+    def test_unknown_trigger_field_is_rejected(self) -> None:
+        source = json.loads(
+            (ROOT / "experiences" / "risk_rules.json").read_text(encoding="utf-8")
+        )
+        source["rules"][0]["trigger_conditions"] = {"typo_threshold": 1}
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "rules.json"
+            path.write_text(json.dumps(source), encoding="utf-8")
+            with self.assertRaises(RiskRuleError):
+                RiskRuleStore(path).load()
+
+    def test_constructed_rule_cannot_claim_physical_history(self) -> None:
+        data = json.loads(self.store.path.read_text(encoding="utf-8"))
+        data["rules"][0]["source"] = {
+            "kind": "human_constructed",
+            "historical_physical_run": True,
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "rules.json"
+            path.write_text(json.dumps(data), encoding="utf-8")
+            with self.assertRaises(RiskRuleError):
+                RiskRuleStore(path).load()
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

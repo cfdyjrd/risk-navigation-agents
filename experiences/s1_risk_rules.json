@@ -1,0 +1,43 @@
+{
+  "schema_version": 1,
+  "rules": [
+    {
+      "rule_id": "s1_rule_insufficient_envelope_clearance_v1",
+      "memory_level": "L2_risk_rule",
+      "risk_type": "narrow_corridor_envelope_intrusion",
+      "trigger_conditions": {
+        "maximum_minimum_envelope_clearance_m": 0.10
+      },
+      "rule": "当扣除感知不确定性后的任一侧最小包络间距不超过0.10米时，不得继续运动，应告警并安全中止。",
+      "recommended_actions": [
+        "safe_stop"
+      ],
+      "prohibited_actions": [
+        "move_forward",
+        "slow_down",
+        "turn_left",
+        "turn_right"
+      ],
+      "mitigations": [
+        "停止后由现场人员重新测量通道和机器人动态包络",
+        "检查机器人是否偏离通道中心线",
+        "不得用未经验证的人工宽度覆盖实时感知"
+      ],
+      "source_memory_ids": [
+        "rmc_s1_constructed_insufficient_margin_abort"
+      ],
+      "statistics": {
+        "support": 0,
+        "success": 0,
+        "failure": 0
+      },
+      "confidence": 0.55,
+      "status": "active",
+      "source": {
+        "kind": "human_constructed",
+        "historical_physical_run": false,
+        "note": "实验前安全规则，不是真机历史事件统计；阈值必须在预实验中审核。"
+      }
+    }
+  ]
+}

@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from typing import Any, Iterable
 
-from safety_guard import HARD_LIMITS
+from safety_guard import HARD_LIMITS, motion_hard_violations
 
 
 MOTION_ACTIONS = {"move_forward", "turn_left", "turn_right", "slow_down"}
@@ -154,12 +154,22 @@ def estimate_action_risk(
 
     robot = scenario.get("robot", {})
     environment = scenario.get("environment", {})
-    clearance = _numeric_difference(
-        environment.get("corridor_width_m"), robot.get("width_m")
+    envelope_clearance = _as_number(
+        environment.get("minimum_envelope_clearance_m")
     )
-    clearance_risk = (
-        _clamp01((0.40 - clearance) / 0.40) if clearance is not None else 0.5
-    )
+    if envelope_clearance is not None:
+        # Side-specific clearance is the relevant quantity for a robot that is
+        # not perfectly centred.  0.20 m per side is the zero-risk reference.
+        clearance_risk = _clamp01((0.20 - envelope_clearance) / 0.20)
+    else:
+        clearance = _numeric_difference(
+            environment.get("corridor_width_m"), robot.get("width_m")
+        )
+        clearance_risk = (
+            _clamp01((0.40 - clearance) / 0.40)
+            if clearance is not None
+            else 0.5
+        )
 
     obstacle_detected = environment.get("obstacle_detected") is True
     obstacle_distance = _as_number(environment.get("obstacle_distance_m"))
@@ -588,37 +598,7 @@ def filter_safe_actions(
     robot = scenario.get("robot", {})
     environment = scenario.get("environment", {})
 
-    global_motion_reasons: list[str] = []
-    obstacle_distance = environment.get("obstacle_distance_m")
-    if (
-        environment.get("obstacle_detected") is True
-        and isinstance(obstacle_distance, (int, float))
-        and obstacle_distance <= HARD_LIMITS["emergency_stop_distance_m"]
-    ):
-        global_motion_reasons.append("emergency_obstacle_distance")
-
-    observation_confidence = environment.get("observation_confidence")
-    if (
-        isinstance(observation_confidence, (int, float))
-        and observation_confidence < HARD_LIMITS["minimum_observation_confidence"]
-    ):
-        global_motion_reasons.append("observation_confidence_below_hard_limit")
-
-    battery = robot.get("battery_percent")
-    if (
-        isinstance(battery, (int, float))
-        and battery <= HARD_LIMITS["minimum_battery_percent"]
-    ):
-        global_motion_reasons.append("battery_below_hard_limit")
-
-    corridor_width = environment.get("corridor_width_m")
-    robot_width = robot.get("width_m")
-    if isinstance(corridor_width, (int, float)) and isinstance(
-        robot_width, (int, float)
-    ):
-        clearance = corridor_width - robot_width
-        if clearance < HARD_LIMITS["minimum_clearance_m"]:
-            global_motion_reasons.append("corridor_clearance_below_hard_limit")
+    global_motion_reasons = motion_hard_violations(scenario)
 
     prohibited_by_rule: dict[str, list[str]] = {}
     for rule in matched_rules:
