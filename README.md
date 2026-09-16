@@ -1,111 +1,145 @@
 # Risk Navigation Agents
 
-面向室内移动机器人的风险感知三 Agent 决策原型。系统使用 360 智脑 API
-运行 Task Advocate、Risk Critic 和 Safety Decision Agent。模型报告进入确定性
-约束优化器，最终动作再由 Safety Guard 复核。
+A risk-aware three-agent decision prototype for indoor mobile robots. The system
+runs a Task Advocate, a Risk Critic and a Safety Decision Agent through the 360
+Zhinao API. The model reports feed a deterministic constrained optimizer, and the
+final action is reviewed once more by a Safety Guard.
 
-G1 的 S1 窄通道真机实验入口、标定、B0/M/B1 条件、低速预实验和完整现场步骤见
-[`docs/S1_narrow_corridor_operation.md`](docs/S1_narrow_corridor_operation.md)。
+For the G1 S1 narrow-corridor hardware experiment — entry point, calibration, the
+B0/M/B1 conditions, the low-speed pilot and the full on-site procedure — see
+[`docs/S1_narrow_corridor_operation.md`](docs/S1_narrow_corridor_operation.md).
 
-项目当前重点实现两项机制：
+The project currently focuses on two mechanisms:
 
-1. 分层风险记忆：从历史经历生成 L1 Risk Memory Card，再归纳为可复用的
-   L2 Risk Rule。
-2. 风险感知检索：根据场景、风险严重度、经验可靠性、时效性和 Agent 角色，
-   为三个角色构造不同的证据包。
+1. Hierarchical risk memory: L1 Risk Memory Cards generated from past
+   experiences, then generalized into reusable L2 Risk Rules.
+2. Risk-aware retrieval: a different evidence pack is assembled for each of the
+   three roles, based on scenario, risk severity, experience reliability,
+   recency and agent role.
 
-## 系统流程
+## Pipeline
 
 ```text
-历史经历（L0）
-    ↓ 压缩并保留来源
-Risk Memory Card（L1）
-    ↓ 归纳
-Risk Rule（L2）
-    ↓ 场景匹配与冲突检查
+Past experiences (L0)
+    ↓ compress, keeping provenance
+Risk Memory Card (L1)
+    ↓ generalize
+Risk Rule (L2)
+    ↓ scenario matching and conflict check
 Task Advocate + Risk Critic
     ↓
 Safety Decision Agent
     ↓
-确定性约束优化器
+Deterministic constrained optimizer
     ↓
 Safety Guard
     ↓
-机器人执行层（平台适配器与审计桥）
+Robot execution layer (platform adapter and audit bridge)
 ```
 
-L2规则目前作为可追溯证据进入三个Agent。若多条L2规则给出互不兼容的建议，
-确定性前置闸门会跳过大模型调用，生成 `safe_stop` 并要求人工复核。
+L2 rules currently enter all three agents as traceable evidence. If several L2
+rules give mutually incompatible advice, a deterministic gate in front of the
+pipeline skips the model calls entirely, emits `safe_stop` and requires human
+review.
 
-## 三个Agent的职责
+## What each agent does
 
-- Task Advocate：寻找完成任务的可行方案，优先使用成功经验和有效缓解措施。
-- Risk Critic：主动寻找碰撞、卡死和任务失败等风险，优先使用失败和高严重度经验。
-- Safety Decision Agent：综合场景事实、正反报告、L1卡片和L2规则作出最终裁决。
+- **Task Advocate** — finds a workable way to complete the task, preferring
+  successful experiences and effective mitigations.
+- **Risk Critic** — actively hunts for risks such as collision, getting stuck and
+  task failure, preferring failure cases and high-severity experiences.
+- **Safety Decision Agent** — makes the final adjudication from the scenario
+  facts, the two opposing reports, the L1 cards and the L2 rules.
 
-Safety Decision Agent 的结果是模型建议，不直接进入机器人执行层。确定性约束
-优化器根据任务收益、相对风险和相对不确定性重新选择可行动作，并同时保留
-`model_recommendation`、`optimized_action` 和 `agrees_with_model` 供审计。
+The Safety Decision Agent's result is a model recommendation and does not reach
+the robot execution layer directly. The deterministic constrained optimizer
+re-selects a feasible action from task utility, relative risk and relative
+uncertainty, and keeps `model_recommendation`, `optimized_action` and
+`agrees_with_model` side by side for audit.
 
-## 真机执行接口
+## Hardware execution interface
 
-G1 人形机器人现已提供独立 `G1LocoDriver` 与 `G1Config`，复用执行桥接和
-任务循环；已完成受限直行运动链路验证。S1 的通道点云标定、动态包络测量和 A/B
-低速预实验仍必须在每套现场布置中单独完成；现场 SDK 核对、只读状态订阅和配置见
-[G1 接入说明](docs/g1_connection.md)。G1 不使用 Go1/Go2 的驱动，必要的
-FSM、姿态和同步观测缺失时拒绝运动。
+The G1 humanoid now has its own `G1LocoDriver` and `G1Config`, reusing the
+execution bridge and the task loop; a restricted straight-line motion path has
+been verified. The S1 corridor point-cloud calibration, dynamic-envelope
+measurement and A/B low-speed pilot must still be done separately for every
+on-site setup; for the on-site SDK checklist, read-only state subscription and
+configuration, see [the G1 integration notes](docs/g1_connection.md). G1 does not
+use the Go1/Go2 driver, and it refuses to move when the required FSM, pose or
+synchronized observations are missing.
 
-`robot_interface.py` 定义了与机器人平台无关的最小接口：读取同步观测、执行一个
-已批准语义动作，以及独立急停。`execution_bridge.py` 在每次下发前读取最新状态，
-将其转换为现有场景结构，再次运行 Safety Guard，并只执行其 `approved_action`。
-输入格式错误、非优化器来源、无效 Guard 输出或平台异常都会触发失效关闭。
+`robot_interface.py` defines a minimal platform-independent interface: read a
+synchronized observation, execute one approved semantic action, and stop
+independently. Before each dispatch, `execution_bridge.py` reads the latest
+state, converts it into the existing scenario structure, runs Safety Guard again,
+and executes only its `approved_action`. Malformed input, an action that did not
+come from the optimizer, invalid Guard output or a platform exception all trigger
+a fail-closed stop.
 
-G1 现场 DDS 发布时钟与开发电脑存在约 24.85 秒稳定偏差。状态采集器不会调整
-机器人或发布端时钟，也不会直接给时间戳加固定偏移；它按每个遥测流分别验证源时间
-持续递增、单调时钟速率、接收间隔与钟差稳定性，验证通过后才用本机接收时间判断
-新鲜度，并保留原始 DDS 时间供审计。该检查通过仍不等于允许运动。
+The G1's on-site DDS publishing clock has a stable offset of about 24.85 s from
+the development machine. The state collector does not adjust the robot's or the
+publisher's clock, and it does not simply add a fixed offset to timestamps;
+instead it verifies, per telemetry stream, that source time increases
+continuously, that the monotonic clock rate holds, and that the receive interval
+and clock offset are stable. Only after those checks pass does it use the local
+receive time to judge freshness, while keeping the raw DDS time for audit.
+Passing this check still does not by itself authorize motion.
 
-后续接入 ROS 2 时，只需实现 `RobotAdapter`，把订阅到的里程计、激光雷达、
-电量和任务状态组成 `RobotObservation`，再把七种语义动作映射为导航目标、速度
-控制、重新观测、人工请求或急停。该适配层不应包含 Agent 或风险推理逻辑。
+To integrate ROS 2 later, implement `RobotAdapter`: assemble the subscribed
+odometry, LiDAR, battery and task state into a `RobotObservation`, and map the
+seven semantic actions to navigation goals, velocity control, re-observation,
+human requests or emergency stop. That adapter layer should contain no agent or
+risk-reasoning logic.
 
-每次执行完成后，桥接层生成包含执行前场景、批准动作、结果、风险反馈与时间戳的
-L0 记录，可通过 `experience_sink` 写入持久化经验库。
+After each execution the bridge produces an L0 record containing the
+pre-execution scenario, the approved action, the outcome, risk feedback and
+timestamps, which can be written to a persistent experience store through
+`experience_sink`.
 
-`unitree_adapter.py` 已提供 Go1 高层 UDP 与 Go2 SDK2 速度驱动，以及设备编号校验、
-观测时效检查、动作参数限幅校验、运动中 Guard 检查和可锁存的软件急停。Go2-1 是
-设备编号，型号为 `go2`；Go1 不使用参考库的 G1 人形机器人接口。传感器订阅/融合、
-网络参数和底盘级急停仍需结合现机接入。回执区分命令发送成功与实际到达，尚未真机验证。
-配置、接线示例与离线测试见 [Go1 / Go2-1 接入说明](docs/unitree_connection.md)。
+`unitree_adapter.py` already provides the Go1 high-level UDP driver and the Go2
+SDK2 velocity driver, plus device-id verification, observation-freshness checks,
+action-parameter clamping, in-motion Guard checks and a latchable software
+emergency stop. Go2-1 is a device id; the model is `go2`. Go1 does not use the
+reference library's G1 humanoid interface. Sensor subscription and fusion,
+network parameters and chassis-level emergency stop still need to be worked out
+against the physical robot. The acknowledgement distinguishes "command sent
+successfully" from "command actually arrived", and has not yet been verified on
+hardware. For configuration, wiring examples and offline tests, see
+[the Go1 / Go2-1 integration notes](docs/unitree_connection.md).
 
-连接前可运行 `robot_preflight.py`，使用 `configs/` 下的 Go1 / Go2-1 配置模板，
-检查 SDK 加载、本地网络配置与传感器 JSON 快照是否有效且持续更新。工具不发送
-机器人控制命令，输出 JSON 报告；预检通过不等于真机已连通或可以运动。
+Before connecting, run `robot_preflight.py` with the Go1 / Go2-1 configuration
+templates under `configs/` to check that the SDK loads, that the local network is
+configured, and that the sensor JSON snapshot is valid and updating. The tool
+sends no robot control commands and emits a JSON report; a passing preflight does
+not mean the robot is connected or cleared to move.
 
-三个Agent均须通过 `cited_experience_ids` 和 `cited_rule_ids` 显式声明实际使用的
-历史经验与规则。代码会拒绝模型编造的ID。
+All three agents must explicitly declare the experiences and rules they actually
+used, via `cited_experience_ids` and `cited_rule_ids`. Fabricated ids are
+rejected in code.
 
-## 环境配置
+## Environment setup
 
-核心决策与离线测试仅使用Python标准库。真机适配进程另需对应的宇树 SDK，
-详见上述接入说明。建议使用Python 3.10或更高版本。
+The core decision path and the offline tests use only the Python standard
+library. The hardware adapter process additionally needs the corresponding
+Unitree SDK — see the integration notes above. Python 3.10 or newer is
+recommended.
 
-复制环境变量示例并编辑本地 `.env`：
+Copy the environment template and edit your local `.env`:
 
 ```bash
 cp .env.example .env
 nano .env
 ```
 
-本地文件内容应为：
+The local file should contain:
 
 ```text
-ZHINAO_API_KEY=你的真实API_Key
+ZHINAO_API_KEY=your_real_api_key
 ZHINAO_BASE_URL=https://api.360.cn/v1
 ZHINAO_MODEL=z-ai/glm-5.1
 ```
 
-每次打开新终端后加载：
+Load it in every new shell:
 
 ```bash
 set -a
@@ -113,78 +147,88 @@ source .env
 set +a
 ```
 
-检查Key是否加载（不会显示Key内容）：
+Check that the key is loaded (this does not print the key):
 
 ```bash
-python3 -c 'import os; print("API Key 已加载" if os.getenv("ZHINAO_API_KEY") else "API Key 未加载")'
+python3 -c 'import os; print("API key loaded" if os.getenv("ZHINAO_API_KEY") else "API key not loaded")'
 ```
 
-`.env` 已被 `.gitignore` 忽略。不要把真实API Key写入代码、README、
-`.env.example`或Git。
+`.env` is already in `.gitignore`. Never put a real API key in code, in this
+README, in `.env.example`, or in git.
 
-## API连通性测试
+## API connectivity test
 
 ```bash
 python3 test_api.py
 ```
 
-预期输出包含“API连接成功”。该命令会调用360 API并产生Token用量。
+The expected output reports a successful API connection. This command calls the
+360 API and consumes tokens.
 
-## 运行完整三Agent流程
+## Running the full three-agent pipeline
 
 ```bash
 python3 run_three_agents.py 2>&1 | tee results/latest_three_agents.txt
 ```
 
-程序执行以下步骤：
+The program does the following:
 
-1. 为三个角色分别检索L1证据包，每个证据包受1800个估算Token的预算约束。
-2. 匹配当前场景适用的L2规则并检查冲突。
-3. 无规则冲突时运行三个Agent。
-4. 校验每份JSON输出、动作集合、置信度及引用ID。
-5. 使用确定性约束优化器逐动作计算任务收益、相对风险和相对不确定性。
-6. 排除违反硬规则、L2禁止规则或数值约束的动作，在剩余动作中最大化任务收益。
-7. 使用Safety Guard对优化后的动作进行执行前复核。
+1. Retrieves an L1 evidence pack for each of the three roles, each constrained to
+   an estimated 1800-token budget.
+2. Matches the L2 rules that apply to the current scenario and checks for
+   conflicts.
+3. Runs the three agents if there is no rule conflict.
+4. Validates every JSON output, action set, confidence value and cited id.
+5. Computes task utility, relative risk and relative uncertainty per action with
+   the deterministic constrained optimizer.
+6. Excludes actions that violate a hard rule, an L2 prohibition or a numeric
+   constraint, and maximizes task utility over what is left.
+7. Runs a pre-execution Safety Guard review of the optimized action.
 
-成功的Agent报告缓存在 `.cache/`。缓存键包含场景、证据包、规则和流程版本，
-相同输入再次运行时可以避免重复调用和重复计费。
+Successful agent reports are cached in `.cache/`. The cache key covers the
+scenario, the evidence packs, the rules and the pipeline version, so re-running
+with the same inputs avoids duplicate calls and duplicate billing.
 
-## 确定性约束动作选择
+## Deterministic constrained action selection
 
-`decision_optimizer.py` 将动作选择显式实现为：
+`decision_optimizer.py` implements action selection explicitly as:
 
 ```text
 maximize task_utility(action)
 subject to:
-  action通过硬安全与L2禁止规则过滤
+  action passes the hard-safety and L2-prohibition filters
   relative_risk(action) <= 0.35
   relative_uncertainty(action) <= 0.45
 ```
 
-任务收益由任务推进、时间成本和能量成本组成。相对风险综合当前场景因素与
-同动作历史记忆；相对不确定性综合观测置信度、记忆证据覆盖度和三个Agent的
-置信度加权分歧。若没有动作满足约束，系统保守回退到 `safe_stop`。
+Task utility is composed of task progress, time cost and energy cost. Relative
+risk combines current scenario factors with past memories of the same action;
+relative uncertainty combines observation confidence, memory evidence coverage
+and the confidence-weighted disagreement among the three agents. If no action
+satisfies the constraints, the system falls back conservatively to `safe_stop`.
 
-风险、不确定性权重及阈值当前均标记为
-`hand_configured_uncalibrated_baseline`。它们是可解释的工程基线，而非已学习或
-经过概率校准的参数。因此输出明确使用 `relative_*_score_not_probability`，
-不能解释为碰撞概率或统计置信区间。
+The risk and uncertainty weights and thresholds are all currently marked
+`hand_configured_uncalibrated_baseline`. They are an interpretable engineering
+baseline, not learned or probability-calibrated parameters. The outputs therefore
+use the explicit name `relative_*_score_not_probability` and must not be read as
+collision probabilities or statistical confidence intervals.
 
-## 分角色风险感知检索
+## Per-role risk-aware retrieval
 
-历史经历保存在 `experiences/risk_experiences.json`。检索评分包含：
+Past experiences live in `experiences/risk_experiences.json`. The retrieval score
+covers:
 
-- 场景相似度
-- 风险严重度
-- 经验可靠性
-- 经验时效性
-- Agent角色适配度
-- 重复证据惩罚
+- scenario similarity
+- risk severity
+- experience reliability
+- experience recency
+- agent-role fit
+- a duplicate-evidence penalty
 
-所有评分分解保存在 `score_breakdown` 中。Advocate、Critic和Decision会获得排序
-不同的证据包。
+The full score decomposition is kept in `score_breakdown`. Advocate, Critic and
+Decision each receive a differently ranked evidence pack.
 
-离线查看检索结果：
+Inspect retrieval offline:
 
 ```bash
 python3 run_retrieval.py
@@ -192,49 +236,53 @@ python3 run_retrieval.py
 
 ## L1 Risk Memory Card
 
-`experience_store.py` 将完整历史经历压缩为L1卡片，主要字段包括：
+`experience_store.py` compresses a full past experience into an L1 card whose
+main fields are:
 
-- `memory_id` 与原始轨迹来源
-- 场景和触发条件
-- 危险类型与严重度
-- 动作、结果和失败原因
-- 缓解措施与停止条件
-- 统计、可靠性和检索评分
-- 指向L2规则的链接
+- `memory_id` and the source trajectory
+- scenario and trigger conditions
+- hazard type and severity
+- action, outcome and failure cause
+- mitigations and stop conditions
+- statistics, reliability and retrieval score
+- links to L2 rules
 
-完整原始经历仍保存在经验库中，避免在每个Agent请求中反复发送长文本。
+The full raw experience stays in the experience store, so long text is not resent
+with every agent request.
 
 ## L2 Risk Rule
 
-正式规则库位于 `experiences/risk_rules.json`。当前窄通道规则由一条失败经历和
-一条成功经历归纳而来：通行总余量不超过0.2米且观测置信度不超过0.8时，
-禁止直接前进，应先重新观测。
+The formal rule base is `experiences/risk_rules.json`. The current
+narrow-corridor rule was generalized from one failure and one success: when total
+passage clearance is at most 0.2 m and observation confidence is at most 0.8,
+moving straight ahead is prohibited and the robot must re-observe first.
 
-查看正式规则的匹配结果：
+See what the formal rules match:
 
 ```bash
 python3 run_rule_retrieval.py scenarios/corridor_obstacle.json
 ```
 
-验证规则不会错误匹配宽走廊场景：
+Verify that the rule does not falsely match a wide corridor:
 
 ```bash
 python3 run_rule_retrieval.py scenarios/wide_corridor_clear.json
 ```
 
-预期 `matched_rule_count` 为0。
+`matched_rule_count` should be 0.
 
-## L2规则冲突实验
+## L2 rule-conflict experiment
 
-`experiences/risk_rules_conflict_fixture.json` 是专用测试夹具，不属于正式规则库。
-其中故意加入一条过度宽泛的规则，用于制造 `observe_again` 与 `slow_down` 的冲突：
+`experiences/risk_rules_conflict_fixture.json` is a dedicated test fixture and is
+not part of the formal rule base. It deliberately includes an overly broad rule
+to create a conflict between `observe_again` and `slow_down`:
 
 ```bash
 python3 run_rule_retrieval.py scenarios/corridor_obstacle.json \
   --rules experiences/risk_rules_conflict_fixture.json
 ```
 
-预期结果：
+Expected result:
 
 ```json
 {
@@ -244,88 +292,104 @@ python3 run_rule_retrieval.py scenarios/corridor_obstacle.json \
 }
 ```
 
-冲突时系统不会按置信度随意选择某条学习规则，而是采用保守回退。
+On a conflict the system does not arbitrarily pick the more confident learned
+rule; it falls back conservatively.
 
-## A/B对比
+## A/B comparison
 
-已有两份相同场景下的运行记录：
+Two runs of the same scenario are already recorded:
 
-- `results/baseline_l1_memory.txt`：仅使用L1。
-- `results/l2_rule_integration.txt`：使用L1与L2。
+- `results/baseline_l1_memory.txt` — L1 only.
+- `results/l2_rule_integration.txt` — L1 plus L2.
 
-生成离线对比报告：
+Generate the offline comparison report:
 
 ```bash
 python3 compare_memory_runs.py
 ```
 
-报告写入 `results/l1_vs_l2_comparison.md`。当前单次实验中，两组均选择
-`observe_again`；L2组增加了显式规则证据和决策可追溯性，但Token增加931
-（约6.36%）。单次运行不能证明L2提高了准确率，后续需要多场景、多次重复实验。
+The report is written to `results/l1_vs_l2_comparison.md`. In this single
+experiment both arms chose `observe_again`; the L2 arm added explicit rule
+evidence and decision traceability at a cost of 931 extra tokens (about 6.36%).
+A single run cannot show that L2 improves accuracy — that needs repeated runs
+across many scenarios.
 
-## 自动化测试
+## Automated tests
 
-运行全部离线测试：
+Run all offline tests:
 
 ```bash
 python3 -m unittest discover -v
 ```
 
-当前测试覆盖：
+Current coverage:
 
-- L1经验加载、压缩、检索、Token预算和角色差异
-- L2规则加载、字段校验、命中和不命中
-- Agent规则引用与虚构ID拦截
-- L2规则冲突检测和确定性 `safe_stop` 闸门
-- 真机观测契约、Guard 后下发、直接模型输出拦截与 L0 回执生成
-- Safety Guard紧急障碍、低置信度、低电量、过窄通道和非法动作
-- 候选动作硬约束与L2禁止规则过滤
-- 任务收益、场景风险、历史记忆风险和三类不确定性计算
-- 约束优化、无可行动作回退和结果可重复性
-- 三Agent报告到优化器再到Safety Guard的离线集成
+- L1 experience loading, compression, retrieval, token budget and role
+  differentiation
+- L2 rule loading, field validation, hits and misses
+- Agent rule citation and rejection of fabricated ids
+- L2 rule-conflict detection and the deterministic `safe_stop` gate
+- Hardware observation contract, post-Guard dispatch, blocking of raw model
+  output and L0 record generation
+- Safety Guard on emergency obstacles, low confidence, low battery,
+  too-narrow passages and illegal actions
+- Candidate-action hard-constraint and L2-prohibition filtering
+- Task utility, scenario risk, memory risk and the three uncertainty terms
+- Constrained optimization, the no-feasible-action fallback and result
+  reproducibility
+- Offline integration from the three agent reports through the optimizer to
+  Safety Guard
 
-这些测试不调用API，不产生模型费用。
+These tests make no API calls and incur no model cost.
 
-## 主要文件
+## Key files
 
 ```text
-agents/                            三个Agent的提示词、调用与输出校验
-experiences/risk_experiences.json L0历史经历
-experiences/risk_rules.json       正式L2规则库
-experience_store.py               L1卡片与风险感知检索
-risk_rule_store.py                L2规则加载、匹配和冲突处理
-run_three_agents.py               完整主流程与确定性冲突闸门
-decision_optimizer.py             安全过滤、评分与确定性约束优化
-safety_guard.py                   模型之外的硬安全规则
-run_retrieval.py                  L1检索演示
-run_rule_retrieval.py             L2规则匹配演示
-compare_memory_runs.py            L1与L1+L2离线对比
-scenarios/                        实验场景
-results/                          实验输出和对比报告
-test_*.py                         离线自动化测试
-docs/method_draft_zh.md           与当前代码对应的Method中文初稿
+agents/                            Prompts, calls and output validation for the three agents
+experiences/risk_experiences.json  L0 past experiences
+experiences/risk_rules.json        Formal L2 rule base
+experience_store.py                L1 cards and risk-aware retrieval
+risk_rule_store.py                 L2 rule loading, matching and conflict handling
+run_three_agents.py                Full main pipeline and the deterministic conflict gate
+decision_optimizer.py              Safety filtering, scoring and deterministic constrained optimization
+safety_guard.py                    Hard safety rules outside the model
+run_retrieval.py                   L1 retrieval demo
+run_rule_retrieval.py              L2 rule matching demo
+compare_memory_runs.py             Offline L1 vs L1+L2 comparison
+scenarios/                         Experiment scenarios
+results/                           Experiment output and comparison reports
+test_*.py                          Offline automated tests
+2d-simulator/                      2D topological simulator and benchmark harness (see its README)
+3d-simulator/                      3D embodied evaluation system on Isaac Sim (see its README)
+docs/method_draft_zh.md            Chinese Method draft matching the current code
 ```
 
-## 当前边界
+## Current limits
 
-- 尚未连接ROS、Nav2或真实机器人SDK。
-- L2规则目前手工归纳并校验，尚未实现从大量L1卡片自动聚类和自动更新。
-- 学习规则不能替代Safety Guard的硬安全边界。
-- 当前实验规模较小，需要增加场景数量、重复次数和量化指标。
-- 任务收益、相对风险、相对不确定性的权重与阈值尚未通过仿真开发集校准，
-  当前分数不能解释为真实事件概率。
+- Not yet connected to ROS, Nav2 or a real robot SDK.
+- L2 rules are currently generalized and checked by hand; automatic clustering
+  and updating from large numbers of L1 cards is not implemented.
+- Learned rules do not replace Safety Guard's hard safety boundary.
+- The experiments are small; they need more scenarios, more repetitions and
+  quantitative metrics.
+- The weights and thresholds for task utility, relative risk and relative
+  uncertainty have not been calibrated on a simulated development set, so the
+  current scores cannot be read as real event probabilities.
 
-## 重新观测后继续决策
+## Continuing to decide after re-observation
 
-`robot_task_loop.py` 提供 `RobotTaskLoop`，连接实时观测、记忆检索、三 Agent、
-优化器和 `SafeExecutionBridge`。`observe_again` 的停止请求不再被当成任务终点：
-循环等待动作返回之后的两帧新观测，确认实测停稳，再更新场景并重新决策。
-每次执行仍由桥接层重新读取状态并经过 Guard，不恢复旧的前进动作。
+`robot_task_loop.py` provides `RobotTaskLoop`, which connects live observations,
+memory retrieval, the three agents, the optimizer and `SafeExecutionBridge`. A
+stop requested by `observe_again` is no longer treated as the end of the task:
+the loop waits for two fresh observations after the action returns, confirms the
+robot has actually come to rest, then updates the scenario and decides again.
+Every execution still has the bridge re-read state and pass through the Guard;
+the previous forward action is never resumed.
 
 ```python
 from robot_task_loop import RobotTaskLoop, make_memory_decider
 
-# bridge 使用已配置的 RobotAdapter；store、rule_store、client 为现有实例。
+# bridge uses a configured RobotAdapter; store, rule_store and client are existing instances.
 loop = RobotTaskLoop(
     bridge,
     make_memory_decider(store, rule_store, client, audit_sink=save_decision_audit),
@@ -336,21 +400,33 @@ loop = RobotTaskLoop(
     observation_timeout_s=3.0,
     task_timeout_s=120.0,
 )
-result = loop.run({"goal": "到达通道出口后的目标点"})
+result = loop.run({"goal": "reach the target point past the corridor exit"})
 ```
 
-`measured_stationary(observation)` 必须根据里程计等真实运动反馈返回布尔值；
-`verified_goal_reached(observation, task)` 必须独立判定实际到达，不能使用命令
-提交成功作为依据。`save_decision_audit(record)` 保存每次角色证据、报告和优化结果。
-这些回调由现场传感器和记录系统提供，不存在可信反馈时循环不会默认认为停稳。
-进入循环前应停好机器人。观测时间戳采用带时区的实际采集时间，传感器与主机需同步。
+`measured_stationary(observation)` must return a boolean based on real motion
+feedback such as odometry. `verified_goal_reached(observation, task)` must judge
+actual arrival independently and must not use "the command was accepted" as
+evidence. `save_decision_audit(record)` stores each run's role evidence, reports
+and optimization result. These callbacks come from the on-site sensors and
+logging system; with no trustworthy feedback the loop never assumes the robot has
+come to rest. Park the robot before entering the loop. Observation timestamps use
+the real, timezone-aware acquisition time, so sensors and host must be
+synchronized.
 
-默认最多连续发出 3 次重新观测请求；超过限制、旧帧无法刷新、停稳确认超时、
-决策异常、运动中止或记录失败都会急停并返回 `fail_closed`。`ask_human` 返回
-`needs_human`，不自动编造回答；Guard/决策要求停止返回 `stopped`；仅独立到达
-判据成立才返回 `completed`。新帧仅说明数据更新，不代表遮挡已经消除。
-该循环不额外生成探查位移，也不提供完整路线规划或人机问答模块。
+By default at most 3 consecutive re-observation requests are issued. Exceeding
+that limit, stale frames that will not refresh, a timeout waiting for
+rest confirmation, a decision exception, an aborted motion or a logging failure
+all trigger an emergency stop and return `fail_closed`. `ask_human` returns
+`needs_human` and never invents an answer; a Guard or decision stop returns
+`stopped`; only the independent arrival criterion returns `completed`. A fresh
+frame only means the data updated — it does not mean the occlusion is gone. The
+loop generates no extra exploratory motion and provides neither full route
+planning nor a human-dialogue module.
 
-同步感知、模型和 SDK 回调必须各自设置 I/O 超时。循环会在轮询及决策返回后检查
-时间预算，但不能强行打断一个永久阻塞的外部调用；硬件急停与看门狗仍由平台负责。
-离线验证：`python3 -m unittest test_robot_task_loop test_execution_bridge test_unitree_adapter`。
+Synchronous perception, model and SDK callbacks must each set their own I/O
+timeout. The loop checks its time budget while polling and after a decision
+returns, but it cannot force-interrupt an external call that blocks forever;
+hardware emergency stop and watchdogs remain the platform's responsibility.
+
+Offline verification:
+`python3 -m unittest test_robot_task_loop test_execution_bridge test_unitree_adapter`.
