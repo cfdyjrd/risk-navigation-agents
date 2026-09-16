@@ -19,7 +19,7 @@ from pathlib import Path
 
 from core.state_interface import contract_views
 
-from spatial_layout import layout_world
+from .spatial_layout import layout_world
 
 KIND_EMOJI = {"corridor": "", "ward": "🛏️", "icu": "🏥", "pharmacy": "💊",
               "stair": "🪜", "checkpoint": "🛂", "retail": "🛍️", "gate": "🛫",

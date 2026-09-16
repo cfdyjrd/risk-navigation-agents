@@ -1,0 +1,19 @@
+# 定位层三档（设计文档 §4）
+default: topdown             # gt | topdown | fpv
+
+gt: {confidence: 1.0}
+
+topdown:
+  update_interval_s: 0.5     # 宏节拍；宏边界必调
+  marker_hsv_lo: [140, 120, 120]   # 品红 HSV 阈值（M4 标定时校准）
+  marker_hsv_hi: [170, 255, 255]
+  min_area_px: 20            # 0.25m marker 在 2.1cm/px 下约 12x12=144px，留遮挡余量
+  projection: orthographic   # M4 首日验证；不可用自动退 homography
+  homography_calib_points: 4 # 场景四角定标色点（单应兜底路线）
+  confidence: {full_area_px: 144, quantize: 0.05}
+  stale_policy: hold_last    # 无检出：pose 保持上次值 + stale 标记 + confidence=0
+
+fpv:                         # 可选档，仅 goto 到点后 zone 确认（E16c）
+  vlm_model: ""              # 按需填
+  room_color_coding: true    # scene_builder 生成房间色码/门牌
+  quantize: 0.05

@@ -1,0 +1,21 @@
+# 人形 = H1FlatTerrainPolicy（展示形态，只跑 E01/E02/E20，设计文档 §2.1 范围收缩）
+embodiment: humanoid
+robot_class: H1FlatTerrainPolicy
+usd_path: "{assets}/Isaac/Robots/Unitree/H1/h1.usd"
+policy: "{assets}/Isaac/Samples/Policies/H1_Policies/h1_policy.pt"
+physics_dt: 0.005          # 1/200
+rendering_dt: 0.04         # 1/25
+spawn_z: 1.05
+settle_steps: 60
+zero_hold_frames: 25       # 约 1s，覆盖减速滞后（§2.1 修正）
+ramp_s: 0.3                # 宏边界线性升/降速段——H1 失稳高发于急加减速切换
+macro_speed:
+  v_form: 0.4
+  w_form: 0.6
+cmd_limit: {vx: 0.5, vy: 0.0, wz: 0.5}   # H1 command 全维限 0.5
+fall_watchdog: {min_base_z: 0.6, max_tilt_deg: 45}
+fpv_mount: {mode: ema_follow, alpha: 0.15, height_m: 1.6}  # 躯干晃动大，EMA 平滑跟随（§6.1）
+raycast: {origin_forward_offset_m: 0.1, down_pitch_deg: 0, front_edge_m: 0.3, height_m: 0.6}
+marker: {size_m: 0.4, color_rgb: [255, 0, 255], heading_tri_m: 0.16}
+# initialize() 签名不带 physics_sim_view——基类按形态分支（§2.1 特例①）
+standing_base_z: 1.0   # 平地站立时基座 z（射线相对高度用；M2 实测）

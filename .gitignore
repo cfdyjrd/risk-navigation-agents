@@ -16,3 +16,27 @@ configs/*.local.json
 *.synctex.gz
 *.fls
 *.fdb_latexmk
+
+# Simulator outputs & generated scenarios (regenerate: python -m generator.build ...)
+2d-simulator/results/
+2d-simulator/replays/
+2d-simulator/scenarios/generated/
+2d-simulator/scenarios/ladder/
+2d-simulator/scenarios/ladder_priority/
+3d-simulator/out/
+
+# Paper drafts, review reports, build artifacts, vendored deps
+output/
+external/
+ccfa-review-reports/
+RESULTS.md
+docs/figs/
+docs/experiment_writing/
+docs/*.tex
+docs/*.pdf
+docs/*.bib
+docs/*.bbl
+docs/*.blg
+docs/*_zh.md
+docs/cjkbreak.lua
+docs/method_v2_CHANGES.md

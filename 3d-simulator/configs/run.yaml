@@ -1,0 +1,40 @@
+# 运行时配置（设计文档 §4.3 剖面 / §8）
+isaac_launcher: local        # local | docker（docker 是争取项，验收以 local 为准 §8.2）
+isaac_python: "~/IsaacSim/_build/linux-aarch64/release/python.sh"
+docker_image: ""             # 争取项就绪后填 arm64 镜像名
+assets_root: "~/isaacsim_assets/Assets/Isaac/5.1"
+
+profiles:                    # 三种运行剖面（§4.3）
+  fastscan:                  # 调试、oracle 可达性验证、探针臂批测
+    localizer: gt
+    render: false
+  mainline:                  # 20×3 主指标批测
+    localizer: topdown
+    render: true
+    rendering_dt: 0.1        # 10Hz 仅 god 单路，FPV 相机不建
+  replay:                    # 代表 seed 出片
+    localizer: inherit       # 与原 run 同档
+    render: true
+    rendering_dt: 0.04       # 25Hz 双路 960x720
+
+macros:                      # §3.2 宏词表（12 个）
+  forward: [0.3, 0.5, 1.0, 2.0]
+  backward: [0.5]
+  turn_deg: [15, 30, 90]
+  stop_hold_s: 0.5
+macro_timeout_factor: 5.0   # 上坡/楼梯时有效速度约减半（8° 坡实测 0.4 m/s），2.0 会频繁 timeout    # 硬超时 = 2x 名义时长
+macro_budget_factor: 1.8     # 每场景 budget = oracle 实测宏数 x1.8（§3.5）
+goto:
+  reach_radius_m: 0.4        # waypoint 到点判据
+  recover_max: 2             # stuck 本地 recover 次数上限，超出上抛 blocked
+watchdog:                    # §3.4 四级 + 反射急停
+  reflex_stop_m: 0.15
+  obstacle_abort_m: 0.30
+  door_exempt_halfwidth_m: 0.8
+  door_exempt_threshold_m: 0.18
+  stuck_window_s: 0.5
+  stuck_min_progress_m: 0.02
+  stuck_strikes: 2
+ipc: {heartbeat_timeout_s: 30}
+video: {resolution: [1280, 960], fps: 25, warmup_frames: 12}
+seeds: {n: 3, spawn_jitter_m: 0.2, spawn_jitter_deg: 10}

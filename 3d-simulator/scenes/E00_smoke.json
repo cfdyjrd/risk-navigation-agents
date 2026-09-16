@@ -1,0 +1,16 @@
+{
+  "id": "E00_smoke",
+  "comment": "M3/M4 冒烟用两房间场景：A 房 -> 1.2m 门洞 -> B 房。schema 见 schema.md",
+  "rooms": {
+    "A": {"aabb": [-3, -2, 0, 2]},
+    "B": {"aabb": [0, -2, 3, 2]}
+  },
+  "doors": [
+    {"between": ["A", "B"], "center": [0.0, 0.0], "width": 1.2}
+  ],
+  "objects": [],
+  "npcs": [],
+  "spawn": {"zone": "A", "yaw_deg": 0},
+  "goal": {"type": "goto", "target": "B"},
+  "macro_budget": 30
+}

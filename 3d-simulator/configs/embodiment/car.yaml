@@ -1,0 +1,22 @@
+# 车 = WheeledRobot + DifferentialController（零 checkpoint，设计文档 §2.1）
+embodiment: car
+robot_class: WheeledRobot
+usd_path: "{assets}/Isaac/Robots/NVIDIA/Jetbot/jetbot.usd"
+wheel_dof_names: [left_wheel_joint, right_wheel_joint]
+controller: {wheel_radius: 0.03, wheel_base: 0.1125, max_linear_speed: 0.5, max_angular_speed: 2.0}
+physics_dt: 0.02           # 1/50
+rendering_dt: 0.04         # 1/25
+spawn_z: 0.05
+settle_steps: 0
+zero_hold_frames: 8
+ramp_s: 0.0
+macro_speed:
+  v_form: 0.3
+  w_form: 1.0
+cmd_limit: {vx: 1.0, vy: 0.0, wz: 1.0}   # vy 恒弃（差速不能横移）
+fall_watchdog: null
+fpv_mount: {mode: rigid, link: chassis, translation: [0.1, 0.0, 0.08]}
+raycast: {origin_forward_offset_m: 0.1, down_pitch_deg: -20, front_edge_m: 0.13, height_m: 0.06}   # 下倾射线：E20 台阶对水平射线不可见（§3.4）
+marker: {size_m: 0.4, color_rgb: [255, 0, 255], heading_tri_m: 0.16}
+standing_base_z: 0.03   # 平地站立时基座 z（射线相对高度用；M2 实测）
+solver: TGS   # 轮式在 PGS 下侧偏/转向过冲（见 isaac_server 注释）

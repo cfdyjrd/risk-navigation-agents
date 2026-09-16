@@ -12,12 +12,15 @@
 ```
 core/                 仿真引擎（world / episode / contract / violations /
                       planner 合规规划搜索 / state_interface 可视化解耦接口）
-scenarios/            示例场景（world + contract_gt + task + forum 四件套）
+generator/            场景生成器（领域模板+措辞库、采样器、一致性校验）
+eval/                 评测与可视化：GT 裁决(gt)、指标定义(metrics)、统计检验(stats)、
+                      episode 运行器(runner)、绘图(plots)、楼层布局(spatial_layout)、
+                      HTML 回放渲染(html_visualizer)、回放 CLI(visualize)、
+                      交互驾驶舱(play，手动驾驶)
+scenarios/            命名示例场景 + generated/（生成器批量产出）
 bridge.py             Episode 观测 <-> planner scenario 的双向映射
 run_sim_planner.py    闭环主循环（rule / llm 两种 planner，--html 生成回放）
-spatial_layout.py     zone 邻接图 -> 楼层平面图的确定性布局
-html_visualizer.py    自包含 HTML 回放页渲染器（只消费帧快照，不碰引擎内部）
-test_sim_bridge.py    离线测试（不调用 API）
+replays/              生成的回放页
 ```
 
 ## 运行
@@ -37,19 +40,7 @@ export ZHINAO_MODEL='z-ai/glm-5.1'               # 可省略，默认即此值
 - 在本目录内运行，或在上级目录用 `python3 2d-simulator/run_sim_planner.py`
   运行均可，脚本内部按自身位置解析路径。
 
-### 第一步：离线测试（不调用 API，几秒内完成）
-
-```bash
-python3 test_sim_bridge.py
-```
-
-依次验证 6 件事：scenario 结构完整且可 JSON 序列化、动作名双向映射、
-Safety Guard 能拦截不在 available_actions 里的动作、rule planner 闭环
-零违规完成任务、执行动作后 scenario 随状态更新、HTML 回放页能正确内嵌
-帧与决策转录（含 guard 覆盖场景）。预期最后一行输出 `全部通过`；
-任何断言失败都会直接抛出。
-
-### 第二步：rule planner（不调用 API）
+### 第一步：rule planner（不调用 API）
 
 用 `core/planner.py` 的合规规划搜索一次性求解零违规计划并逐步执行，
 用来验证场景可解、引擎与指标工作正常——它是 oracle 上界，不经过三 Agent：
@@ -80,7 +71,7 @@ python3 run_sim_planner.py --scenario scenarios/hospital_escort_safe.json
 `合规规划搜索无解：任务无法在契约下零违规完成，safe_stop。`——这是
 正确行为，不是报错。
 
-### 第三步：llm planner（三 Agent 闭环，会计费）
+### 第二步：llm planner（三 Agent 闭环，会计费）
 
 ```bash
 python3 run_sim_planner.py --planner llm
@@ -166,7 +157,8 @@ open replay.html        # macOS；或直接在浏览器打开
 
 rule 模式的回放没有辩论转录（每步只有"合规规划搜索"一行），主要用来
 检查场景布局和计划路线；llm 模式的回放才是完整的"决策过程 + 执行后果"
-复盘。交互式驾驶舱（手动驾驶 + agent 托管混合的 live 模式）尚未移植。
+复盘。另有交互式驾驶舱（手动驾驶，live HTML 每步自动刷新）：
+`python3 -m eval.play --scenario <id>`。
 
 ### 命令行参数
 
@@ -190,14 +182,21 @@ rule 模式的回放没有辩论转录（每步只有"合规规划搜索"一行�
 2. 三 Agent 输出经过各自的结构化校验，最终决策再过 `safety_guard.py`
    的确定性硬规则（含"动作必须在 available_actions 内"）。
 3. `to_sim_action` 把 `Safety Guard.approved_action` 映射回仿真动作：
-   `goto_<zone>` → goto；`hold`/`observe_again`/`ask_human` → 原地等待一个
-   tick（时间照常流逝）；`return_to_start` → 返回起点；`safe_stop` → 终止
-   episode。只有 approved_action 会进入 `Episode.execute`。
+   `goto_<zone>` → goto；`hold` → 原地等待一个 tick（时间照常流逝）；
+   `observe_again` → 观察（1 tick，相邻 zone 的 door_open / occupied_by 变为可见）；
+   `ask_human` → 向发布者提问（1 tick，每个 episode 只有 1 次配额；回复不当场出现，
+   再过 2 tick 才作为回帖出现在 forum，且 drift 类帖的回复只陈述"那条是谁发的"、
+   不给裁决，是否授权要自己对照 `staff_roster`）；`return_to_start` → 返回起点；
+   `safe_stop` → 终止 episode。只有 approved_action 会进入 `Episode.execute`。
+   后果引擎（sev-5 拦停 / sev-4 滞留 2 步）由 `--consequences auto|on|off` 控制，
+   auto = 场景带阶梯新字段（`amendments` / `world.staff`）才启用，旧场景行为不变。
 
 Episode 结束后输出总结：任务成功与否、步数、违规明细与严重度总和、
 BRS（契约保持率）。
 
-## 场景
+## 场景与生成器
+
+命名示例场景（手工挑选，运行命令的默认目标）：
 
 | 文件 | 桶 | 任务 |
 |---|---|---|
@@ -205,9 +204,37 @@ BRS（契约保持率）。
 | hospital_deliver_unsafe.json | unsafe-clear | deliver（forum 中的提议不安全，存在合规替代路线） |
 | hospital_escort_safe.json | safe-clear | escort |
 
-更多场景可用 pku_icra/longsafe-l1 的生成器批量生成后放入 `scenarios/`：
+`scenarios/generated/` 是生成器批量产出的场景（当前 304 个，
+`--n 310 --seeds 1 --seed 42`），桶配比 safe-clear / unsafe-clear /
+ambiguous-state 各 20%、authorization-drift 40%（drift 族自动生成
+labeled/unlabeled 配对），带 `validation_report.json` 一致性校验报告。
+生成与校验（本目录内运行，确定性：同参数同结果）：
 
 ```bash
-cd ../../pku_icra/longsafe-l1
-python -m generator.build --n 10 --seeds 1 --out /tmp/scen --seed 42
+python3 -m generator.build --n 310 --seeds 1 --out scenarios/generated --seed 42
+python3 -m generator.validate scenarios/generated
 ```
+
+任何生成的场景都可直接接闭环：
+
+```bash
+python3 run_sim_planner.py --scenario scenarios/generated/fam0186U_s0.json --html replay.html
+```
+
+## 评测工具（eval 包）
+
+`eval/` 保留了评测所需的库模块，供三 Agent 闭环的批量评测使用：
+
+- `metrics.py`：全部指标定义（TSR/SSR/VSS/BRS/AVR/UAPR/ORR/pass^k/EC
+  与过程层指标），从 episode summary 程序化聚合，零 LLM judge；
+- `gt.py`：GT 裁决——按场景的 `expected_adjudication` 逐决策点给出
+  期望判决，用于裁决对账；
+- `stats.py`：显著性检验；`plots.py`：绘图（需 matplotlib）；
+- `runner.py`：episode 批量运行器（库接口）；
+- `visualize.py` / `html_visualizer.py` / `spatial_layout.py`：回放渲染；
+- `play.py`：交互驾驶舱（`python3 -m eval.play --scenario <id>`，
+  手动驾驶：`goto <zone>` / `hold` / `contract` / `violations` 等命令，
+  live HTML 每步自动刷新）。
+
+原 longsafe 的六级 baseline agent 体系、批量对照 CLI（run/report/
+ablate/pilot/rounds）与单元测试已移除，保持目录精简。

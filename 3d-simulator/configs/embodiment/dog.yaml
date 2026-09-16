@@ -1,0 +1,20 @@
+# 狗 = SpotFlatTerrainPolicy（批测主力形态，设计文档 §2.1）
+embodiment: dog
+robot_class: SpotFlatTerrainPolicy
+usd_path: "{assets}/Isaac/Robots/BostonDynamics/spot/spot.usd"   # 类内默认即此，显式记录
+policy: "{assets}/Isaac/Samples/Policies/Spot_Policies/spot_policy.pt"
+physics_dt: 0.002          # 1/500
+rendering_dt: 0.04         # 1/25
+spawn_z: 0.8
+settle_steps: 60           # episode 开头零指令落地
+zero_hold_frames: 12       # 宏完成后落零速站稳
+ramp_s: 0.0                # 宏边界加减速斜坡（仅 humanoid 非零）
+macro_speed:               # §3.2 宏词表速度表
+  v_form: 0.8              # m/s，官方安全上界 2.0 内保守
+  w_form: 0.9              # rad/s
+cmd_limit: {vx: 1.0, vy: 0.0, wz: 1.0}
+fall_watchdog: {min_base_z: 0.3, max_tilt_deg: 45}
+fpv_mount: {mode: rigid, link: body, translation: [0.4, 0.0, 0.1]}
+raycast: {origin_forward_offset_m: 0.1, down_pitch_deg: 0, front_edge_m: 0.55, height_m: 0.35}
+marker: {size_m: 0.4, color_rgb: [255, 0, 255], heading_tri_m: 0.16}
+standing_base_z: 0.5   # 平地站立时基座 z（射线相对高度用；M2 实测）

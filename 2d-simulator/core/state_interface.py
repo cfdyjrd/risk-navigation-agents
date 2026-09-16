@@ -87,18 +87,22 @@ class EpisodeSession(IStateProvider):
 
     act() 把 goto 非相邻目标拆成逐跳单 tick 调用——与引擎内部展开语义逐 tick 等价
     (引擎多跳循环本身就是每跳一个 _tick,途中 done 即停),这样才能在每个中间
-    tick 抓到快照。
+    tick 抓到快照。ask / observe 各消耗 1 tick、留 1 帧。
     """
 
-    def __init__(self, scenario: dict, stream_forum: bool = True):
+    def __init__(self, scenario: dict, stream_forum: bool = True,
+                 consequences: bool | None = None):
+        """consequences 透传给 Episode:None = 仅当场景带阶梯新字段时启用后果引擎。"""
         self.scenario = scenario
         self.stream_forum = stream_forum
+        self.consequences = consequences
         self.decisions: list[dict] = []
         self.history: list[dict] = []
         self.reset()
 
     def reset(self):
-        self.ep = Episode(self.scenario, stream_forum=self.stream_forum)
+        self.ep = Episode(self.scenario, stream_forum=self.stream_forum,
+                          consequences=self.consequences)
         self.decisions = []
         self.history = []
         self._n_vio = len(self.ep.violations)
@@ -122,6 +126,11 @@ class EpisodeSession(IStateProvider):
             "visited": sorted(s.visited),
             "entities": _entities(ep),
             "decision": len(self.decisions) - 1 if self.decisions else None,
+            # 阶梯版(可视化兼容字段,渲染器可忽略):拦停原因 / 累计滞留 tick / 本 tick 回复帖
+            "terminated": ep.terminated,
+            "detained": ep.detained_ticks,
+            "reply": (entry or {}).get("reply"),          # 本 tick 到达的回复帖(提问后延迟到达)
+            "questions_remaining": ep.questions_remaining,
         }
 
     def get_frame(self) -> dict:
@@ -159,6 +168,13 @@ class EpisodeSession(IStateProvider):
                 res = ep.execute(goto_action(nxt))
                 entries += res.entries
                 self.frames.append(self._frame(entered=True, entry=res.entries[-1]))
+            return entries
+        if atype in ("ask", "observe"):
+            # 问答 / 观察:各消耗 1 tick、生成 1 帧
+            res = ep.execute({"type": atype})
+            entries += res.entries
+            if res.entries:
+                self.frames.append(self._frame(entered=False, entry=res.entries[-1]))
             return entries
         res = ep.execute({"type": "hold"})
         entries += res.entries
@@ -205,13 +221,15 @@ def decision_view(step_log: dict) -> dict:
 
 
 # ---------------------------------------------------------------- 离线回放
-def extract_replay(scenario: dict, trajectory: dict, stream_forum: bool = True) -> dict:
+def extract_replay(scenario: dict, trajectory: dict, stream_forum: bool = True,
+                   consequences: bool | None = None) -> dict:
     """重演一条已落盘轨迹 -> {frames, decisions, history, summary}。
 
     重演即还原:引擎确定性保证同动作序列产生同 tick 流;每 tick 与原始日志
     对照(zone 与违规 cid),不一致计入 summary.mismatches(应为 0)。
+    consequences:None = 按场景字段自动(旧场景关闭);重演旧批次日志时保持 None/False。
     """
-    sess = EpisodeSession(scenario, stream_forum=stream_forum)
+    sess = EpisodeSession(scenario, stream_forum=stream_forum, consequences=consequences)
     mismatch = 0
     for s in trajectory["steps"]:
         dv = decision_view(s)
@@ -227,7 +245,8 @@ def extract_replay(scenario: dict, trajectory: dict, stream_forum: bool = True) 
                     mismatch += 1
         n_vio = sum(len(e["violations"]) for e in entries)
         act = s["decision"]["action"]
-        label = {"goto": f"goto {act.get('zone')}", "hold": "hold", "return": "return"} \
+        label = {"goto": f"goto {act.get('zone')}", "hold": "hold", "return": "return",
+                 "ask": "ask_human", "observe": "observe"} \
             .get(act.get("type"), str(act))
         sess.history.append({
             "step": dv["at"], "label": label, "verdict": dv["verdict"],
@@ -240,7 +259,9 @@ def extract_replay(scenario: dict, trajectory: dict, stream_forum: bool = True) 
         "summary": {"success": ep.success, "steps": ep.state.step,
                     "violations": len(ep.violations),
                     "vss": sum(v.severity for v in ep.violations),
-                    "brs_final": round(ep.brs_curve[-1], 4), "mismatches": mismatch},
+                    "brs_final": round(ep.brs_curve[-1], 4), "mismatches": mismatch,
+                    "terminated_by": ep.terminated, "detained_ticks": ep.detained_ticks,
+                    "consequences": ep.consequences},
     }
 
 
